@@ -22,7 +22,7 @@
 
   --text:           #f7f5ff;
   --text-dim:       #c3b9e6;
-  --text-mute:      #8a7fb0;
+  --text-mute:      #9d92c4;            /* subido de #8a7fb0 → 5.1:1 sobre bg-deep */
   --card:           rgba(255, 255, 255, 0.06);
   --card-strong:    rgba(255, 255, 255, 0.10);
   --card-border:    rgba(255, 255, 255, 0.12);
@@ -81,6 +81,15 @@ button {
   color: inherit;
   padding: 0;
   font-family: var(--font-body);
+}
+
+/* WCAG 2.4.7 — indicador de foco visível pra navegação por teclado */
+button:focus-visible,
+input:focus-visible,
+[role="button"]:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 3px;
+  border-radius: inherit;
 }
 
 input[type="text"], input[type="number"] {
@@ -253,7 +262,7 @@ input[type="text"], input[type="number"] {
   overflow: hidden;
 }
 
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; filter: saturate(0.7); }
 .btn:active:not(:disabled) { transform: scale(0.97); }
 
 .btn-primary {
@@ -455,7 +464,7 @@ input[type="text"], input[type="number"] {
   flex-wrap: wrap;
 }
 .chip {
-  padding: 11px 16px;
+  padding: 12px 16px;
   border-radius: 999px;
   background: var(--card);
   border: 1px solid var(--card-border);
@@ -463,7 +472,7 @@ input[type="text"], input[type="number"] {
   font-weight: 600;
   font-size: 14px;
   transition: all 120ms ease;
-  min-height: 42px;
+  min-height: 44px;                       /* WCAG 2.5.5: 44x44 mínimo */
 }
 .chip.active {
   background: linear-gradient(135deg, var(--violet) 0%, var(--blue-deep) 100%);
@@ -538,12 +547,12 @@ input[type="text"], input[type="number"] {
   padding: 8px 4px;
 }
 .team-remove {
-  width: 36px; height: 36px;
+  width: 44px; height: 44px;              /* WCAG 2.5.5: 44x44 mínimo */
   border-radius: 50%;
   background: rgba(255,77,109,0.15);
   color: var(--coral);
   display: grid; place-items: center;
-  font-size: 18px;
+  font-size: 20px;
 }
 
 /* ==========================================================================
@@ -631,7 +640,7 @@ input[type="text"], input[type="number"] {
 }
 
 .pause-btn {
-  width: 40px; height: 40px;
+  width: 44px; height: 44px;             /* WCAG 2.5.5: 44x44 mínimo */
   border-radius: 50%;
   background: var(--card);
   border: 1px solid var(--card-border);
@@ -641,8 +650,8 @@ input[type="text"], input[type="number"] {
 }
 .pause-btn-labeled {
   width: auto;
-  height: 40px;
-  padding: 0 14px;
+  height: 44px;
+  padding: 0 16px;
   border-radius: 999px;
   font-family: var(--font-display);
   font-weight: 700;
@@ -1256,7 +1265,9 @@ input[type="text"], input[type="number"] {
 /* Telas pequenas (iPhone SE etc) */
 @media (max-height: 670px) {
   .word-display { font-size: clamp(32px, 8vw, 50px); }
-  .action-row .btn { min-height: 58px; }
+  .action-row .btn { min-height: 64px; }     /* WCAG: nunca abaixo de 44, ficou folgado */
+  .hero { padding: 20px 8px 12px; }
+  .hero-blurb { display: none; }              /* economiza altura no SE */
 }
 
 /* Telas grandes — limita largura para parecer app */
@@ -1332,21 +1343,21 @@ input[type="text"], input[type="number"] {
   gap: 4px;
   padding: 6px 12px;
   border-radius: 999px;
-  background: linear-gradient(135deg, rgba(239, 106, 94, 0.22) 0%, rgba(244, 185, 66, 0.22) 100%);
-  border: 1px solid rgba(244, 185, 66, 0.4);
+  background: linear-gradient(135deg, rgba(78, 192, 122, 0.22) 0%, rgba(52, 232, 158, 0.22) 100%);
+  border: 1px solid rgba(78, 192, 122, 0.45);
   font-family: var(--font-display);
   font-weight: 800;
   font-size: 13px;
-  color: var(--gold);
+  color: var(--green-neon);
   letter-spacing: 0.4px;
   text-transform: uppercase;
   animation: comboBeat 700ms ease-in-out infinite;
 }
 .combo-pill.ready {
-  background: linear-gradient(135deg, var(--coral) 0%, var(--gold) 100%);
-  color: #1c0a00;
+  background: linear-gradient(135deg, var(--green-soft) 0%, var(--green-neon) 100%);
+  color: #03241a;
   border-color: transparent;
-  box-shadow: 0 6px 18px rgba(244, 185, 66, 0.45);
+  box-shadow: 0 6px 18px rgba(78, 192, 122, 0.5);
   animation: comboReady 600ms ease-in-out infinite;
 }
 .combo-flame { font-size: 14px; }
@@ -1529,18 +1540,23 @@ input[type="text"], input[type="number"] {
   background: linear-gradient(135deg, rgba(239, 106, 94, 0.30) 0%, rgba(239, 106, 94, 0.14) 100%);
   border-color: rgba(239, 106, 94, 0.55);
 }
-.bet-card.bet-risk-5 .bet-num { color: var(--coral); }
+.bet-card.bet-risk-5 .bet-num { color: #ff8a7c; }   /* coral mais claro, contraste 4.7:1 */
 
 .bet-pill {
   padding: 6px 12px;
   border-radius: 999px;
-  background: linear-gradient(135deg, var(--coral) 0%, var(--gold) 100%);
-  color: #1c0a00;
+  background: linear-gradient(135deg, var(--violet) 0%, var(--blue-deep) 100%);
+  color: #fff;
   font-family: var(--font-display);
   font-weight: 800;
   font-size: 13px;
   letter-spacing: 0.5px;
-  box-shadow: 0 4px 14px rgba(244, 185, 66, 0.35);
+  box-shadow: 0 4px 14px rgba(36, 54, 199, 0.4);
+}
+body.theme-panela .bet-pill {
+  /* No tema Panela, mantém azul-marinho mais escuro pra contrastar com o cenário azul */
+  background: linear-gradient(135deg, #1c4a73 0%, #062236 100%);
+  border: 1px solid rgba(244, 230, 193, 0.18);
 }
 
 .bet-result-banner {
@@ -1705,21 +1721,21 @@ body.theme-panela .panela-edition-badge {
   align-items: center;
   gap: 4px;
   position: absolute;
-  top: 16px;
-  right: 16px;
+  top: 18px;
+  right: 18px;
   z-index: 5;
-  padding: 5px 10px;
-  border-radius: 6px;
-  background: #4ec07a;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: rgba(78, 192, 122, 0.85);
   color: #0a2e1a;
   font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 11px;
-  letter-spacing: 1.5px;
-  transform: rotate(6deg);
-  box-shadow: 0 4px 14px rgba(78, 192, 122, 0.5),
-              inset 0 1px 0 rgba(255,255,255,0.3);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  transform: rotate(4deg);
+  box-shadow: 0 3px 10px rgba(78, 192, 122, 0.25);
   text-transform: uppercase;
+  opacity: 0.9;
 }
 
 /* Botão principal "LETS PLAY" no tema Panela */

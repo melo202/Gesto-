@@ -32,10 +32,31 @@
   <script src="./categories.js"></script>
   <script src="./app.js"></script>
   <script>
-    // Registro silencioso do service worker (não trava o app se falhar)
+    // Registro do service worker com auto-update
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(() => { /* ignora */ });
+        navigator.serviceWorker.register('./sw.js').then((reg) => {
+          // Força checagem de update toda vez que carrega
+          reg.update().catch(() => {});
+          reg.addEventListener('updatefound', () => {
+            const nw = reg.installing;
+            if (!nw) return;
+            nw.addEventListener('statechange', () => {
+              if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+                // Nova versão disponível — recarrega na próxima navegação
+                nw.postMessage({ type: 'SKIP_WAITING' });
+              }
+            });
+          });
+        }).catch(() => { /* ignora se SW falhar */ });
+
+        // Quando o SW assume controle de uma versão nova, recarrega
+        let reloaded = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (reloaded) return;
+          reloaded = true;
+          window.location.reload();
+        });
       });
     }
   </script>
