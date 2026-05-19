@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0420" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Gesto!" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="description" content="Gesto! — Acerte 5 antes do tempo acabar. Party game de mímica em grupos." />
+
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="data:image/svg+xml;utf8,&lt;svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22&gt;&lt;rect width=%22100%22 height=%22100%22 rx=%2222%22 fill=%22%237b3df0%22/&gt;&lt;text x=%2250%22 y=%2266%22 font-size=%2260%22 text-anchor=%22middle%22 font-family=%22system-ui%22&gt;🎭&lt;/text&gt;&lt;/svg&gt;" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml;utf8,&lt;svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22&gt;&lt;rect width=%22100%22 height=%22100%22 rx=%2222%22 fill=%22%237b3df0%22/&gt;&lt;text x=%2250%22 y=%2266%22 font-size=%2260%22 text-anchor=%22middle%22 font-family=%22system-ui%22&gt;🎭&lt;/text&gt;&lt;/svg&gt;" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="./styles.css" />
+  <title>Gesto! — Acerte 5 antes do tempo acabar</title>
+</head>
+<body>
+  <div class="app-shell" id="appShell">
+    <!-- Renderização total por JS no #appShell. -->
+  </div>
+
+  <!-- Camada de toast leve para mensagens curtas (copiado, etc) -->
+  <div class="toast" id="toast" aria-live="polite"></div>
+
+  <script src="./categories.js"></script>
+  <script src="./app.js"></script>
+  <script>
+    // Registro silencioso do service worker (não trava o app se falhar)
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(() => { /* ignora */ });
+      });
+    }
+  </script>
+</body>
+</html>
