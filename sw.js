@@ -2,7 +2,7 @@
  * Estratégia: pré-cache no install + network-first com fallback offline ao cache.
  * Funciona em GitHub Pages (escopo relativo).
  */
-const VERSION = 'gesto-v1.5.0';
+const VERSION = 'gesto-v1.6.1';
 const ASSETS = [
   './',
   './index.html',
@@ -14,7 +14,8 @@ const ASSETS = [
   './Clockfruit Panic.wav',
   './Fail Accordion.wav',
   './Neon Gavel.wav',
-  './ROUND ONE FIGHT.wav'
+  './ROUND ONE FIGHT.wav',
+  './Lounge Loop.mp3'
 ];
 
 self.addEventListener('install', (event) => {

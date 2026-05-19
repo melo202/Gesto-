@@ -156,7 +156,9 @@
       comboBonus: 3,                // a cada N acertos seguidos sem pular = +1 pulo
       allowBet: true,               // (A) aposta no modo Times
       trackMimer: false,            // (D) registrar mímico de cada rodada (opt-in)
-      surpriseCategory: false       // (E) categoria surpresa no meio da rodada
+      surpriseCategory: false,      // (E) categoria surpresa no meio da rodada
+      ambientMusic: true,           // música de fundo nas telas calmas
+      ambientVolume: 0.28           // volume da música (0 a 1)
     },
     skipsLeft: 3,                   // pulos disponíveis na rodada atual
     combo: 0,                       // acertos seguidos sem pular
@@ -283,7 +285,8 @@
     defeat:  'Fail Accordion.wav',
     heat:    'Clockfruit Panic.wav',   // últimos 10s
     sudden:  'Neon Gavel.wav',
-    round1:  'ROUND ONE FIGHT.wav'
+    round1:  'ROUND ONE FIGHT.wav',
+    ambient: 'Lounge Loop.mp3'         // música de fundo nas telas calmas (MP3 é mais leve)
   };
   const _panelaAudio = {};   // cache de Audio() instances
   let _heatHandle = null;     // referência do áudio de tensão pra parar quando termina
@@ -329,6 +332,89 @@
     const a = _panelaAudio[key];
     if (!a) return;
     try { a.pause(); a.currentTime = 0; } catch (e) {}
+  }
+
+  // ----- Música ambiente (telas calmas: home/menus/result) -----
+  let _ambient = null;
+  let _ambientFadeId = null;
+  let _ambientWanted = false;     // estado lógico — queremos tocar?
+
+  function ensureAmbient() {
+    if (_ambient !== null) return _ambient;
+    if (AppState.settings.soundPack !== 'panela') { _ambient = false; return false; }
+    const file = PANELA_PACK.ambient;
+    const url = './' + file.split('/').map(encodeURIComponent).join('/');
+    try {
+      const a = new Audio(url);
+      a.loop = true;
+      a.volume = 0;
+      a.preload = 'auto';
+      a.addEventListener('error', () => {
+        // arquivo não existe ainda — desativa silenciosamente, sem mostrar toast
+        console.warn('[Gesto] Música ambiente não encontrada (' + file + '). App continua normal.');
+        _ambient = false;
+      });
+      _ambient = a;
+      return a;
+    } catch (e) {
+      _ambient = false;
+      return false;
+    }
+  }
+
+  function fadeAmbient(targetVol, durationMs, onDone) {
+    if (!_ambient || _ambient === false) { if (onDone) onDone(); return; }
+    if (_ambientFadeId) { clearInterval(_ambientFadeId); _ambientFadeId = null; }
+    const startVol = _ambient.volume;
+    const delta = targetVol - startVol;
+    const steps = 20;
+    let i = 0;
+    _ambientFadeId = setInterval(() => {
+      i++;
+      const t = i / steps;
+      _ambient.volume = Math.max(0, Math.min(1, startVol + delta * t));
+      if (i >= steps) {
+        clearInterval(_ambientFadeId);
+        _ambientFadeId = null;
+        if (onDone) onDone();
+      }
+    }, durationMs / steps);
+  }
+
+  function startAmbient() {
+    _ambientWanted = true;
+    if (!AppState.settings.ambientMusic) return;
+    if (AppState.settings.soundPack !== 'panela') return;
+    const a = ensureAmbient();
+    if (!a) return;
+    if (a.paused) {
+      a.volume = 0;
+      const p = a.play();
+      if (p && typeof p.then === 'function') {
+        p.then(() => fadeAmbient(AppState.settings.ambientVolume, 1200))
+         .catch(() => { /* autoplay bloqueado, vai destravar no próximo toque */ });
+      }
+    } else {
+      fadeAmbient(AppState.settings.ambientVolume, 800);
+    }
+  }
+
+  function stopAmbient() {
+    _ambientWanted = false;
+    if (!_ambient || _ambient === false || _ambient.paused) return;
+    fadeAmbient(0, 600, () => {
+      try { if (_ambient && _ambient.pause) _ambient.pause(); } catch (e) {}
+    });
+  }
+
+  // Decide se a tela atual quer música ou silêncio
+  function updateAmbientMusic() {
+    const silentScreens = ['countdown', 'playing'];
+    if (silentScreens.includes(AppState.screen)) {
+      stopAmbient();
+    } else {
+      startAmbient();
+    }
   }
 
   // Toca cada um dos 5 sons em sequência, com toast mostrando qual está tocando
@@ -1040,6 +1126,8 @@
   }
 
   function render() {
+    // Música ambiente: liga/desliga conforme a tela
+    updateAmbientMusic();
     switch (AppState.screen) {
       case 'home':          return renderHome();
       case 'modeSelect':    return renderModeSelect();
@@ -1332,7 +1420,15 @@
         AppState.mode === 'teams' && toggleRow('Mímico nominal (MVP)', 'Registra quem mimicou. Calcula MVP no fim.', AppState.settings.trackMimer,
           () => { AppState.settings.trackMimer = !AppState.settings.trackMimer; tap(); persistSettings(); renderRoundSetup(); }),
         toggleRow('Categoria surpresa', 'Pode trocar de categoria no meio da rodada (35% das vezes).', AppState.settings.surpriseCategory,
-          () => { AppState.settings.surpriseCategory = !AppState.settings.surpriseCategory; tap(); persistSettings(); renderRoundSetup(); })
+          () => { AppState.settings.surpriseCategory = !AppState.settings.surpriseCategory; tap(); persistSettings(); renderRoundSetup(); }),
+        toggleRow('Música ambiente', 'Loop calmo nas telas de menu. Para automaticamente na rodada.', AppState.settings.ambientMusic,
+          () => {
+            AppState.settings.ambientMusic = !AppState.settings.ambientMusic;
+            tap();
+            persistSettings();
+            if (AppState.settings.ambientMusic) startAmbient(); else stopAmbient();
+            renderRoundSetup();
+          })
       ),
 
       el('div', { class: 'setup-section' },
