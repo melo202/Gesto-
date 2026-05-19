@@ -407,6 +407,26 @@
     });
   }
 
+  // Para a música ambiente IMEDIATAMENTE, sem fade — usado antes de SFX dramáticos
+  function stopAmbientImmediate() {
+    _ambientWanted = false;
+    if (!_ambient || _ambient === false || _ambient.paused) return;
+    if (_ambientFadeId) { clearInterval(_ambientFadeId); _ambientFadeId = null; }
+    try { _ambient.volume = 0; _ambient.pause(); } catch (e) {}
+  }
+
+  // Audio ducking: abaixa o volume da ambient pra X% durante 'duration' ms, depois retoma
+  function duckAmbient(duckTo, duration) {
+    if (!_ambient || _ambient === false || _ambient.paused) return;
+    fadeAmbient(duckTo, 200, () => {
+      setTimeout(() => {
+        if (_ambientWanted && _ambient && !_ambient.paused) {
+          fadeAmbient(AppState.settings.ambientVolume, 600);
+        }
+      }, duration);
+    });
+  }
+
   // Decide se a tela atual quer música ou silêncio
   function updateAmbientMusic() {
     const silentScreens = ['countdown', 'playing'];
@@ -452,15 +472,28 @@
   function playSound(type) {
     if (AppState.settings.soundPack === 'mute') return;
 
-    // Se pacote Panela ativo, tenta tocar o WAV antes do procedural
+    // Se pacote Panela ativo, toca o WAV correspondente + faz ducking da ambient
     if (AppState.settings.soundPack === 'panela') {
-      if (type === 'victory')  { panelaPlay('victory'); return; }
-      if (type === 'defeat')   { panelaPlay('defeat');  return; }
-      if (type === 'sudden')   { panelaPlay('sudden');  return; }
-      if (type === 'round1')   { panelaPlay('round1');  return; }
+      // SFX dramáticos: abaixa ambient temporariamente pra não chocar
+      if (type === 'victory')  { duckAmbient(0.04, 3000); panelaPlay('victory'); return; }
+      if (type === 'defeat')   { duckAmbient(0.04, 2400); panelaPlay('defeat');  return; }
+      if (type === 'sudden')   { duckAmbient(0.04, 2000); panelaPlay('sudden');  return; }
+
+      // ROUND ONE FIGHT precisa da cena 100% dele — para ambient seco antes de tocar
+      if (type === 'round1')   {
+        stopAmbientImmediate();
+        panelaPlay('round1');
+        return;
+      }
+
+      // Heat loop: ambient já está parada (rodada playing), então sem ducking
       if (type === 'heatStart') { _heatHandle = panelaPlay('heat', { volume: 0.55 }); return; }
       if (type === 'heatStop')  { panelaStop('heat'); _heatHandle = null; return; }
-      // pra click/correct/skip/tick/count/go/lastone usa procedural ainda
+
+      // Procedurais que ficariam em cima de outros sons Panela — mutar quando há conflito
+      if (type === 'tick' || type === 'lastone') return;  // Clockfruit já tá rolando
+      if (type === 'count' && AppState.mode === 'teams') return; // ROUND ONE FIGHT cobre o countdown
+      // click/correct/skip/go ainda usam procedural (curtos e leves, não conflitam)
     }
 
     // Pacote procedural (default)
@@ -781,7 +814,7 @@
   function showSurpriseOverlay(newCat, onDone) {
     const overlay = el('div', { class: 'surprise-overlay', id: 'surpriseOverlay' },
       el('div', { class: 'surprise-icon' }, '🌀'),
-      el('div', { class: 'surprise-label' }, 'CATEGORIA SURPRESA'),
+      el('div', { class: 'surprise-label' }, 'TROCOU TUDO!'),
       el('div', { class: 'surprise-name' }, newCat.emoji + ' ' + newCat.name)
     );
     document.body.appendChild(overlay);
@@ -1160,6 +1193,7 @@
     screen.appendChild(el('button', {
       class: 'theme-toggle-btn',
       title: 'Trocar tema',
+      'aria-label': isPanela ? 'Mudar para tema clássico' : 'Mudar para tema Panela Inc.',
       onClick: () => {
         tap();
         AppState.settings.themePanela = !AppState.settings.themePanela;
@@ -1203,13 +1237,6 @@
         el('button', { class: 'btn btn-ghost', onClick: () => { tap(); navigate('stats'); } }, 'Estatísticas')
       ),
 
-      isPanela && el('div', { class: 'btn-row', style: { marginTop: '8px' } },
-        el('button', {
-          class: 'btn btn-ghost',
-          style: { fontSize: '13px', minHeight: '44px' },
-          onClick: () => { tap(); testPanelaSounds(); }
-        }, '🔊 Testar sons')
-      ),
 
       // Aviso quando o jogo foi aberto via file:// (áudio bloqueado pela maioria dos browsers)
       location.protocol === 'file:' && el('div', {
@@ -1322,7 +1349,7 @@
     const team = AppState.mode === 'teams' ? AppState.teams[AppState.currentTeamIndex] : null;
 
     const screen = el('div', { class: 'screen' },
-      topbar('Configuração', () =>
+      topbar('Antes de começar', () =>
         AppState.mode === 'teams' ? navigate('scoreboard') : navigate('categorySelect')
       ),
 
@@ -1398,12 +1425,12 @@
       ),
 
       el('div', { class: 'setup-section' },
-        el('label', { class: 'setup-label' }, 'Opções'),
+        el('label', { class: 'setup-label' }, 'Esquema'),
         toggleRow('Som', 'Beeps e fanfarra.', AppState.settings.sound,
           () => { AppState.settings.sound = !AppState.settings.sound; tap(); persistSettings(); renderRoundSetup(); }),
         toggleRow('Vibração', 'Feedback tátil no celular.', AppState.settings.vibration,
           () => { AppState.settings.vibration = !AppState.settings.vibration; tap(); persistSettings(); renderRoundSetup(); }),
-        toggleRow('Permitir pular', 'Trocar palavra quando travar.', AppState.settings.allowSkip,
+        toggleRow('Pode pular', 'Trocar palavra quando travar.', AppState.settings.allowSkip,
           () => { AppState.settings.allowSkip = !AppState.settings.allowSkip; tap(); persistSettings(); renderRoundSetup(); }),
         toggleRow('Modo Festa', 'Cada palavra vem com um desafio.', AppState.settings.partyMode,
           () => { AppState.settings.partyMode = !AppState.settings.partyMode; tap(); persistSettings(); renderRoundSetup(); }),
@@ -1417,7 +1444,7 @@
           }),
         AppState.mode === 'teams' && toggleRow('Aposta', 'Antes da rodada, time aposta. Cumpriu = 2pts. Errou = 0.', AppState.settings.allowBet,
           () => { AppState.settings.allowBet = !AppState.settings.allowBet; tap(); persistSettings(); renderRoundSetup(); }),
-        AppState.mode === 'teams' && toggleRow('Mímico nominal (MVP)', 'Registra quem mimicou. Calcula MVP no fim.', AppState.settings.trackMimer,
+        AppState.mode === 'teams' && toggleRow('MVP da Panela', 'Registra quem mimicou. Calcula o MVP no fim do jogo.', AppState.settings.trackMimer,
           () => { AppState.settings.trackMimer = !AppState.settings.trackMimer; tap(); persistSettings(); renderRoundSetup(); }),
         toggleRow('Categoria surpresa', 'Pode trocar de categoria no meio da rodada (35% das vezes).', AppState.settings.surpriseCategory,
           () => { AppState.settings.surpriseCategory = !AppState.settings.surpriseCategory; tap(); persistSettings(); renderRoundSetup(); }),
@@ -1432,7 +1459,14 @@
       ),
 
       el('div', { class: 'setup-section' },
-        el('label', { class: 'setup-label' }, 'Pacote de som'),
+        el('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' } },
+          el('label', { class: 'setup-label', style: { margin: 0 } }, 'Trilha sonora'),
+          AppState.settings.soundPack === 'panela' && el('button', {
+            class: 'chip',
+            style: { fontSize: '12px', padding: '6px 10px', minHeight: '32px' },
+            onClick: () => { tap(); testPanelaSounds(); }
+          }, '🔊 Testar')
+        ),
         el('div', { class: 'chip-row' },
           ...[
             { id: 'procedural', label: 'Procedural' },
@@ -1460,12 +1494,25 @@
   }
 
   function toggleRow(label, sub, on, onClick) {
-    return el('div', { class: 'toggle-row', onClick },
+    return el('div', {
+      class: 'toggle-row',
+      role: 'switch',
+      tabindex: '0',
+      'aria-checked': on ? 'true' : 'false',
+      'aria-label': label + ': ' + (on ? 'ligado' : 'desligado'),
+      onClick,
+      onKeydown: (e) => {
+        if (e.code === 'Space' || e.code === 'Enter') {
+          e.preventDefault();
+          onClick();
+        }
+      }
+    },
       el('div', { class: 'label-pair' },
         el('span', { class: 'lbl' }, label),
         el('span', { class: 'sub' }, sub)
       ),
-      el('div', { class: 'switch' + (on ? ' on' : '') })
+      el('div', { class: 'switch' + (on ? ' on' : ''), 'aria-hidden': 'true' })
     );
   }
 
@@ -1491,6 +1538,7 @@
               value: t.name,
               maxlength: 22,
               placeholder: 'Nome do time',
+              'aria-label': 'Nome do time ' + (i + 1),
               onInput: (e) => { AppState.teams[i].name = e.target.value || ('Time ' + (i + 1)); }
             }),
             AppState.teams.length > 2 && el('button', {
@@ -1545,7 +1593,7 @@
       topbar('', () => navigate('roundSetup'), true),
       el('div', { class: 'prepare-wrap' },
         team && el('div', { class: 'prepare-team-badge' }, team.name),
-        el('h2', { class: 'prepare-title' }, 'Preparem-se'),
+        el('h2', { class: 'prepare-title' }, 'Bora?'),
         el('p', { class: 'prepare-instructions' },
           'O objetivo é acertar ' + AppState.targetScore + ' palavras. ',
           el('br'),
@@ -1629,6 +1677,7 @@
           type: 'text',
           placeholder: 'Digita o nome…',
           maxlength: 20,
+          'aria-label': 'Nome do mímico da rodada',
           onInput: (e) => { inputValue = e.target.value; }
         })
       ),
@@ -1667,7 +1716,7 @@
       el('h2', { class: 'prepare-title', style: { textAlign: 'center', fontSize: '32px', margin: '8px 0 4px' } }, 'Quantas vocês apostam?'),
       el('p', {
         style: { textAlign: 'center', color: 'var(--text-dim)', fontSize: '14px', maxWidth: '320px', margin: '0 auto 20px' }
-      }, 'Apostou e cumpriu: ', el('strong', { style: { color: 'var(--gold)' } }, '+2 pontos'), '. Apostou e errou: ', el('strong', { style: { color: 'var(--coral)' } }, '0 pontos'), '.'),
+      }, 'Bateu a aposta: ', el('strong', { style: { color: 'var(--gold)' } }, '2 pontos'), '. Errou: ', el('strong', { style: { color: 'var(--coral)' } }, 'zero'), '.'),
 
       el('div', { class: 'bet-grid' },
         el('button', {
@@ -1675,8 +1724,8 @@
           onClick: () => pickBet(null)
         },
           el('div', { class: 'bet-num' }, '—'),
-          el('div', { class: 'bet-title' }, 'Sem aposta'),
-          el('div', { class: 'bet-sub' }, 'Vence rodada = 1 pt')
+          el('div', { class: 'bet-title' }, 'Sem risco'),
+          el('div', { class: 'bet-sub' }, 'Vence a rodada = 1 pt')
         ),
         ...[3, 4, 5].map((n) =>
           el('button', { class: 'bet-card bet-risk-' + n, onClick: () => pickBet(n) },
@@ -1690,7 +1739,7 @@
 
       el('p', {
         style: { textAlign: 'center', color: 'var(--text-mute)', fontSize: '12px', marginTop: '16px' }
-      }, 'Não dá pra desistir depois de apostar.')
+      }, 'Apostou, apostou. Sem volta.')
     );
     root().appendChild(screen);
   }
@@ -1701,6 +1750,9 @@
   function renderCountdown() {
     root().innerHTML = '';
     AppState.roundStatus = 'countdown';
+    // Para a música ambiente seca antes de qualquer SFX dramático
+    if (AppState.settings.soundPack === 'panela') stopAmbientImmediate();
+
     const screen = el('div', { class: 'screen' });
     const wrap = el('div', { class: 'prepare-wrap' });
     const num = el('div', { class: 'countdown-number' }, '3');
@@ -1750,8 +1802,12 @@
           (team ? team.name + ' • ' : '') + (cat ? cat.name : '')
         ),
         AppState.bet
-          ? el('div', { class: 'bet-pill', title: 'Aposta atual' },
-              '🎲 ' + AppState.bet
+          ? el('div', {
+              class: 'bet-pill',
+              role: 'status',
+              'aria-label': 'Apostou ' + AppState.bet + ' acertos'
+            },
+              el('span', { 'aria-hidden': 'true' }, '🎲 '), AppState.bet
             )
           : el('div', { style: { width: '0' } })
       ),
@@ -1827,18 +1883,21 @@
   function renderSkipsIndicator() {
     const max = AppState.settings.maxSkips;
     if (max === 0) {
-      return el('div', { class: 'skips-indicator unlimited' },
+      return el('div', { class: 'skips-indicator unlimited', role: 'status', 'aria-label': 'Pulos ilimitados' },
         el('span', {}, '∞ pulos')
       );
     }
     const left = AppState.skipsLeft;
-    // mostra até 6 ícones (caso combos ganhem muitos)
     const display = Math.min(Math.max(left, max), 6);
     const dots = [];
     for (let i = 0; i < display; i++) {
-      dots.push(el('span', { class: 'skip-dot' + (i < left ? ' on' : '') }, '🍳'));
+      dots.push(el('span', { class: 'skip-dot' + (i < left ? ' on' : ''), 'aria-hidden': 'true' }, '🍳'));
     }
-    return el('div', { class: 'skips-indicator' + (left === 0 ? ' empty' : '') },
+    return el('div', {
+      class: 'skips-indicator' + (left === 0 ? ' empty' : ''),
+      role: 'status',
+      'aria-label': left + ' pulo' + (left === 1 ? '' : 's') + ' restante' + (left === 1 ? '' : 's')
+    },
       el('span', { class: 'skips-label' }, left + ' pulo' + (left === 1 ? '' : 's')),
       el('div', { class: 'skips-dots' }, ...dots)
     );
@@ -1940,8 +1999,8 @@
       el('div', { class: 'result-hero' },
         el('h1', { class: 'result-title ' + (won ? 'win' : 'lose') },
           won
-            ? (AppState.timeLeft <= 3 ? 'No último suspiro!' : (AppState.timeLeft >= 30 ? 'LENDÁRIO!' : 'Missão cumprida!'))
-            : (AppState.score >= 4 ? 'Faltou só uma!' : 'Quase!')
+            ? (AppState.timeLeft <= 3 ? 'No último suspiro!' : (AppState.timeLeft >= 30 ? 'LENDÁRIO!' : 'Fechamos!'))
+            : (AppState.score >= 4 ? 'Faltou só uma!' : 'Vish…')
         ),
         el('p', { class: 'result-sub' },
           won
