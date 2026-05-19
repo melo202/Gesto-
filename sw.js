@@ -2,14 +2,19 @@
  * Estratégia: pré-cache no install + network-first com fallback offline ao cache.
  * Funciona em GitHub Pages (escopo relativo).
  */
-const VERSION = 'gesto-v1.1.0';
+const VERSION = 'gesto-v1.5.0';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
   './categories.js',
-  './manifest.webmanifest'
+  './manifest.webmanifest',
+  './Brass Flag Win.wav',
+  './Clockfruit Panic.wav',
+  './Fail Accordion.wav',
+  './Neon Gavel.wav',
+  './ROUND ONE FIGHT.wav'
 ];
 
 self.addEventListener('install', (event) => {
@@ -17,6 +22,12 @@ self.addEventListener('install', (event) => {
     caches.open(VERSION).then((cache) => cache.addAll(ASSETS).catch(() => {}))
   );
   self.skipWaiting();
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('activate', (event) => {
