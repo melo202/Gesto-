@@ -628,7 +628,18 @@ input[type="text"], input[type="number"] {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 14px 18px 8px;
+  min-width: 0;        /* permite filhos truncarem em vez de estourar */
+}
+.game-header > * { flex-shrink: 0; }
+.game-header > .game-category-pill {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
 }
 
 .game-category-pill {
@@ -660,6 +671,30 @@ input[type="text"], input[type="number"] {
   gap: 4px;
   display: inline-flex;
   align-items: center;
+}
+
+/* Botão "↶ Voltar" no header da rodada (substitui bet-pill quando há ação no histórico) */
+.undo-btn {
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--violet-hi) 0%, var(--violet) 100%);
+  color: #fff;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 4px 14px rgba(123, 61, 240, 0.35);
+  transition: transform 90ms ease;
+}
+.undo-btn:active { transform: scale(0.94); }
+body.theme-panela .undo-btn {
+  background: linear-gradient(135deg, #f4b942 0%, #ef6a5e 100%);
+  color: #1c0a00;
+  box-shadow: 0 4px 14px rgba(244, 185, 66, 0.4);
 }
 
 .timer-bar-wrap {
@@ -1578,6 +1613,26 @@ body.theme-panela .bet-pill {
   background: linear-gradient(135deg, rgba(239, 106, 94, 0.22) 0%, rgba(255, 77, 109, 0.18) 100%);
   border: 1px solid rgba(239, 106, 94, 0.45);
   color: #ffc4b8;
+}
+
+/* Dica de instalação PWA na home — esconde quando já é standalone (Bug 4) */
+.pwa-hint {
+  margin: 16px auto 0;
+  max-width: 320px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+  font-size: 12px;
+  color: var(--text-mute);
+  text-align: center;
+  line-height: 1.5;
+  letter-spacing: 0.1px;
+}
+.pwa-hint strong { color: var(--text-dim); font-weight: 700; }
+
+@media (display-mode: standalone) {
+  .pwa-hint { display: none; }
 }
 
 /* Botão flutuante de troca de tema (canto sup. esquerdo da home) */

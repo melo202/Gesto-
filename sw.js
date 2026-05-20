@@ -2,7 +2,7 @@
  * Estratégia: pré-cache no install + network-first com fallback offline ao cache.
  * Funciona em GitHub Pages (escopo relativo).
  */
-const VERSION = 'gesto-v1.9.0';
+const VERSION = 'gesto-v2.0.0';
 const ASSETS = [
   './',
   './index.html',

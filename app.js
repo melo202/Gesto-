@@ -166,7 +166,8 @@
     bet: null,                      // aposta da rodada atual: null | 3 | 4 | 5
     currentMimer: null,             // nome do mímico da rodada (modo Times)
     knownMimers: [],                // nomes já registrados na sessão
-    surpriseDone: false             // se categoria surpresa já disparou nessa rodada
+    surpriseDone: false,            // se categoria surpresa já disparou nessa rodada
+    actionHistory: []               // últimas ações da rodada — permite voltar 1 palavra
   };
 
   // Carrega settings persistidas se existirem
@@ -711,6 +712,7 @@
     AppState.bet = null;
     AppState.currentMimer = null;
     AppState.surpriseDone = false;
+    AppState.actionHistory = [];
   }
 
   function startRound() {
@@ -727,6 +729,18 @@
   function markCorrect() {
     if (AppState.roundStatus !== 'playing') return;
     if (_transitioning) return;
+    // Snapshot pra função "voltar palavra"
+    AppState.actionHistory.push({
+      type: 'correct',
+      word: AppState.currentWord,
+      challenge: AppState.currentChallenge,
+      scoreBefore: AppState.score,
+      comboBefore: AppState.combo,
+      skipsLeftBefore: AppState.skipsLeft,
+      skipsEarnedBefore: AppState.skipsEarned
+    });
+    if (AppState.actionHistory.length > 5) AppState.actionHistory.shift();
+
     playSound('correct');
     vibrate('correct');
     AppState.correctWords.push(AppState.currentWord);
@@ -769,6 +783,18 @@
       showToast('Sem pulos. Acerta combo pra ganhar mais.', 1800);
       return;
     }
+    // Snapshot pra função "voltar palavra"
+    AppState.actionHistory.push({
+      type: 'skip',
+      word: AppState.currentWord,
+      challenge: AppState.currentChallenge,
+      scoreBefore: AppState.score,
+      comboBefore: AppState.combo,
+      skipsLeftBefore: AppState.skipsLeft,
+      skipsEarnedBefore: AppState.skipsEarned
+    });
+    if (AppState.actionHistory.length > 5) AppState.actionHistory.shift();
+
     playSound('skip');
     vibrate('skip');
     AppState.skippedWords.push(AppState.currentWord);
@@ -863,6 +889,54 @@
     }
   }
 
+  // ----- Bug 1: voltar para palavra anterior -----
+  // Desfaz o último acerto/pulo e mostra a palavra anterior de novo.
+  // Só permite voltar UMA vez por sequência — depois precisa fazer nova ação pra liberar.
+  function undoLastAction() {
+    if (AppState.roundStatus !== 'playing') return;
+    if (_transitioning) return;
+    if (!AppState.actionHistory || AppState.actionHistory.length === 0) {
+      showToast('Nada pra voltar.', 1400);
+      return;
+    }
+    const last = AppState.actionHistory.pop();
+
+    // Desfaz registros
+    if (last.type === 'correct') {
+      // Remove ÚLTIMA ocorrência do word em correctWords
+      const idx = AppState.correctWords.lastIndexOf(last.word);
+      if (idx !== -1) AppState.correctWords.splice(idx, 1);
+    } else if (last.type === 'skip') {
+      const idx = AppState.skippedWords.lastIndexOf(last.word);
+      if (idx !== -1) AppState.skippedWords.splice(idx, 1);
+    }
+
+    // Restaura métricas exatas do antes-da-ação
+    AppState.score = last.scoreBefore;
+    AppState.combo = last.comboBefore;
+    AppState.skipsLeft = last.skipsLeftBefore;
+    AppState.skipsEarned = last.skipsEarnedBefore;
+
+    // Remove a palavra que tinha vindo DEPOIS dela do usedWords (era a próxima sorteada)
+    // e a própria palavra que voltou — vai ser reusada agora
+    if (AppState.usedWords.length > 0) AppState.usedWords.pop();   // remove "próxima" atual
+    // remove a antiga e adiciona de novo no fim pra manter consistência
+    const oldIdx = AppState.usedWords.lastIndexOf(last.word);
+    if (oldIdx !== -1) AppState.usedWords.splice(oldIdx, 1);
+
+    AppState.currentWord = last.word;
+    AppState.currentChallenge = last.challenge;
+    AppState.usedWords.push(last.word);
+
+    // Limpa o histórico — só permite voltar 1 vez consecutiva (anti-abuso)
+    AppState.actionHistory = [];
+
+    playSound('click');
+    vibrate('tap');
+    showToast('Palavra anterior.', 1200);
+    renderGameContent();
+  }
+
   function flash(cls) {
     const gs = $('#gameScreen');
     if (!gs) return;
@@ -876,6 +950,7 @@
     if (AppState.roundStatus !== 'playing') return;
     AppState.roundStatus = 'paused';
     stopTimer();
+    panelaStop('heat');   // Bug 3: garante silêncio durante a pausa
     showPauseOverlay();
   }
 
@@ -889,6 +964,10 @@
   function endRound(reason) {
     if (['won', 'lost', 'finished'].includes(AppState.roundStatus)) return;
     stopTimer();
+
+    // Bug 3: para TODOS os loops/SFX antes do drama final, pra não chocar áudio
+    panelaStop('heat');
+
     const result = AppState.score >= AppState.targetScore ? 'won' : 'lost';
     AppState.roundStatus = result;
 
@@ -1154,8 +1233,30 @@
   // Navegação
   // ---------------------------------------------------------------------------
   function navigate(screen) {
+    // Cleanup defensivo entre telas — evita bugs de elementos residuais (Bug 2)
+    cleanupBetweenScreens(screen);
     AppState.screen = screen;
     render();
+  }
+
+  function cleanupBetweenScreens(nextScreen) {
+    // Remove confete que pode estar pendurado de uma vitória anterior
+    const conf = document.getElementById('confettiCanvas');
+    if (conf) conf.remove();
+
+    // Remove overlays órfãos
+    const pauseOverlay = document.getElementById('pauseOverlay');
+    if (pauseOverlay) pauseOverlay.remove();
+    const surpriseOverlay = document.getElementById('surpriseOverlay');
+    if (surpriseOverlay) surpriseOverlay.remove();
+
+    // Reset do lock de transição
+    _transitioning = false;
+
+    // Garante stop do heat loop quando saindo de tela de jogo
+    if (AppState.screen === 'playing' && nextScreen !== 'playing') {
+      panelaStop('heat');
+    }
   }
 
   function render() {
@@ -1237,6 +1338,11 @@
         el('button', { class: 'btn btn-ghost', onClick: () => { tap(); navigate('stats'); } }, 'Estatísticas')
       ),
 
+      // Bug 4: dica de instalação PWA — escondida via CSS quando display-mode: standalone
+      el('p', { class: 'pwa-hint' },
+        el('span', { 'aria-hidden': 'true' }, '📲 '),
+        'No iPhone: toca em ', el('strong', {}, 'Compartilhar'), ' e ', el('strong', {}, 'Adicionar à Tela de Início'), ' pra jogar como app.'
+      ),
 
       // Aviso quando o jogo foi aberto via file:// (áudio bloqueado pela maioria dos browsers)
       location.protocol === 'file:' && el('div', {
@@ -1430,11 +1536,11 @@
           () => { AppState.settings.sound = !AppState.settings.sound; tap(); persistSettings(); renderRoundSetup(); }),
         toggleRow('Vibração', 'Feedback tátil no celular.', AppState.settings.vibration,
           () => { AppState.settings.vibration = !AppState.settings.vibration; tap(); persistSettings(); renderRoundSetup(); }),
-        toggleRow('Pode pular', 'Trocar palavra quando travar.', AppState.settings.allowSkip,
+        toggleRow('Pode pular', 'Troca a palavra quando travar.', AppState.settings.allowSkip,
           () => { AppState.settings.allowSkip = !AppState.settings.allowSkip; tap(); persistSettings(); renderRoundSetup(); }),
         toggleRow('Modo Festa', 'Cada palavra vem com um desafio.', AppState.settings.partyMode,
           () => { AppState.settings.partyMode = !AppState.settings.partyMode; tap(); persistSettings(); renderRoundSetup(); }),
-        toggleRow('Tema Panela Inc.', 'Skin azul lago + drinks + frigideira.', AppState.settings.themePanela,
+        toggleRow('Tema Panela Inc.', 'Visual azul lago + drinks + frigideira.', AppState.settings.themePanela,
           () => {
             AppState.settings.themePanela = !AppState.settings.themePanela;
             tap();
@@ -1791,6 +1897,8 @@
     const cat = AppState.selectedCategory;
     const team = AppState.mode === 'teams' ? AppState.teams[AppState.currentTeamIndex] : null;
 
+    const canUndo = AppState.actionHistory && AppState.actionHistory.length > 0;
+
     const screen = el('div', { class: 'game-screen', id: 'gameScreen' },
       el('div', { class: 'game-header' },
         el('button', {
@@ -1801,15 +1909,22 @@
         el('div', { class: 'game-category-pill', id: 'gameCategoryPill' },
           (team ? team.name + ' • ' : '') + (cat ? cat.name : '')
         ),
-        AppState.bet
-          ? el('div', {
-              class: 'bet-pill',
-              role: 'status',
-              'aria-label': 'Apostou ' + AppState.bet + ' acertos'
-            },
-              el('span', { 'aria-hidden': 'true' }, '🎲 '), AppState.bet
+        canUndo
+          ? el('button', {
+              class: 'undo-btn',
+              'aria-label': 'Voltar para a palavra anterior',
+              onClick: () => { undoLastAction(); }
+            }, '↶ Voltar')
+          : (AppState.bet
+              ? el('div', {
+                  class: 'bet-pill',
+                  role: 'status',
+                  'aria-label': 'Apostou ' + AppState.bet + ' acertos'
+                },
+                  el('span', { 'aria-hidden': 'true' }, '🎲 '), AppState.bet
+                )
+              : el('div', { style: { width: '0' } })
             )
-          : el('div', { style: { width: '0' } })
       ),
       el('div', { class: 'timer-bar-wrap' },
         el('div', { class: 'timer-bar-fill', id: 'timerBarFill', style: { transform: 'scaleX(1)' } })
@@ -1822,7 +1937,7 @@
         el('h2', { class: 'word-display', id: 'wordDisplay' }, AppState.currentWord || '—'),
         (AppState.settings.partyMode || AppState.mode === 'party') && AppState.currentChallenge
           ? el('div', { class: 'challenge-card' },
-              el('span', { class: 'label' }, 'Desafio Festa'),
+              el('span', { class: 'label' }, 'Desafio da festa'),
               AppState.currentChallenge
             )
           : null
@@ -1858,7 +1973,7 @@
       stage.appendChild(el('h2', { class: 'word-display', id: 'wordDisplay' }, AppState.currentWord || '—'));
       if ((AppState.settings.partyMode || AppState.mode === 'party') && AppState.currentChallenge) {
         stage.appendChild(el('div', { class: 'challenge-card' },
-          el('span', { class: 'label' }, 'Desafio Festa'),
+          el('span', { class: 'label' }, 'Desafio da festa'),
           AppState.currentChallenge
         ));
       }
@@ -2315,10 +2430,10 @@
         step(1, 'Escolha uma categoria.', '17 categorias, de Animais a Atualidades & Internet.'),
         step(2, 'Defina o tempo.', '45, 60, 90 ou 120 segundos.'),
         step(3, 'Uma pessoa faz mímica.', 'Sem falar e sem soletrar. O grupo adivinha.'),
-        step(4, 'ACERTOU vs PULAR.', 'Botão verde soma 1 acerto. Amarelo troca a palavra.'),
-        step(5, 'Meta: 5 acertos.', 'Antes do tempo acabar. Quem conseguir, vence a rodada.'),
-        step(6, '🏆 Modo Times.', 'Crie 2 a 6 times. Melhor de 3, 5 ou 7. Empate vai pra morte súbita.'),
-        step(7, '🎉 Modo Festa.', 'Cada palavra vem com um desafio: câmera lenta, sem mãos, dramático, etc. Tem botão direto na tela inicial.'),
+        step(4, 'ACERTOU ou PULAR.', 'Botão verde soma 1 acerto. Amarelo troca a palavra. O ↶ Voltar desfaz a última jogada.'),
+        step(5, 'Meta: 5 acertos.', 'Antes do tempo terminar. Quem conseguir, vence a rodada.'),
+        step(6, '🏆 Modo Times.', 'Crie de 2 a 6 times. Melhor de 3, 5 ou 7. Empate vira morte súbita.'),
+        step(7, '🎉 Modo Festa.', 'Cada palavra vem com um desafio: câmera lenta, sem mãos, dramático, etc. Acesse pelo botão na tela inicial.'),
         step(8, 'Medalhas.', 'Bronze (1–10s), Prata (11–20s), Ouro (21–29s), Lendário (30s+).'),
         el('p', { style: { color: 'var(--text-mute)', fontSize: '13px', textAlign: 'center', marginTop: '12px' } },
           'Tudo é salvo só no seu celular. Nada vai pra internet.'
