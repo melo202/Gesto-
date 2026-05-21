@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a5a82"/>
+      <stop offset="50%" stop-color="#2436c7"/>
+      <stop offset="100%" stop-color="#7b3df0"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#fff8e7"/>
+      <stop offset="100%" stop-color="#f4b942"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <!-- granulado leve -->
+  <g opacity="0.08">
+    <circle cx="100" cy="120" r="3" fill="#fff"/>
+    <circle cx="1080" cy="80" r="2" fill="#fff"/>
+    <circle cx="600" cy="40" r="2" fill="#fff"/>
+    <circle cx="200" cy="550" r="3" fill="#fff"/>
+    <circle cx="900" cy="500" r="2" fill="#fff"/>
+    <circle cx="1100" cy="400" r="2" fill="#fff"/>
+  </g>
+  <!-- selo zoeira -->
+  <g transform="translate(85, 90)">
+    <rect x="0" y="0" rx="22" ry="22" width="220" height="44" fill="#f4b942"/>
+    <text x="110" y="29" text-anchor="middle" font-family="Manrope, system-ui, sans-serif" font-size="17" font-weight="800" fill="#1a3050" letter-spacing="2">★ EDIÇÃO ZOEIRA</text>
+  </g>
+  <!-- emoji máscara -->
+  <text x="600" y="280" text-anchor="middle" font-size="180" font-family="Apple Color Emoji, Segoe UI Emoji, system-ui">🎭</text>
+  <!-- título principal -->
+  <text x="600" y="410" text-anchor="middle" font-family="Bricolage Grotesque, Manrope, system-ui, sans-serif" font-size="120" font-weight="800" fill="url(#title)">Gesto<tspan fill="#ef6a5e">!</tspan></text>
+  <!-- tag panela -->
+  <text x="600" y="465" text-anchor="middle" font-family="Manrope, system-ui, sans-serif" font-size="22" font-weight="600" fill="#fff" opacity="0.85" letter-spacing="6">— PANELA INC. —</text>
+  <!-- tagline -->
+  <text x="600" y="525" text-anchor="middle" font-family="Manrope, system-ui, sans-serif" font-size="34" font-weight="700" fill="#fff">Acerte 5 antes do tempo acabar.</text>
+  <!-- subtítulo -->
+  <text x="600" y="575" text-anchor="middle" font-family="Manrope, system-ui, sans-serif" font-size="20" font-weight="500" fill="#fff" opacity="0.75">Party game de mímica em grupos. #PanelaInc</text>
+</svg>

@@ -8,6 +8,11 @@
   // ---------------------------------------------------------------------------
   // Constantes
   // ---------------------------------------------------------------------------
+  // Logger silencioso em produção. Ligue via console: window.GESTO_DEBUG = true
+  const DEBUG = (typeof window !== 'undefined' && window.GESTO_DEBUG === true);
+  const dlog  = DEBUG ? console.log.bind(console)  : function () {};
+  const dwarn = DEBUG ? console.warn.bind(console) : function () {};
+
   const STORAGE_KEY = 'gesto.v1';
   const TEAM_COLORS = ['#7b3df0', '#34e89e', '#ff7a3d', '#2436c7', '#ff4d6d', '#ffd166'];
   const DEFAULT_TEAM_NAMES = ['Time Lilás', 'Time Verde', 'Time Laranja', 'Time Azul', 'Time Coral', 'Time Dourado'];
@@ -27,7 +32,7 @@
     'muito rápido', 'muito cansado', 'como apresentador de TV',
     'como vilão', 'como super-herói', 'como atleta olímpico',
     'como se estivesse com sono', 'como se estivesse atrasado',
-    'em silêncio absoluto', 'versão rica e esnobe', 'versão humilde demais',
+    'sem mover os pés do chão', 'versão rica e esnobe', 'versão humilde demais',
     'versão câmera de segurança', 'versão propaganda de televisão'
   ];
 
@@ -158,7 +163,8 @@
       trackMimer: false,            // (D) registrar mímico de cada rodada (opt-in)
       surpriseCategory: false,      // (E) categoria surpresa no meio da rodada
       ambientMusic: true,           // música de fundo nas telas calmas
-      ambientVolume: 0.28           // volume da música (0 a 1)
+      ambientVolume: 0.28,          // volume da música (0 a 1)
+      difficultyLevel: 'mixed'      // 'soft' | 'mixed' | 'hard' — curva do mix/aleatório
     },
     skipsLeft: 3,                   // pulos disponíveis na rodada atual
     combo: 0,                       // acertos seguidos sem pular
@@ -167,7 +173,13 @@
     currentMimer: null,             // nome do mímico da rodada (modo Times)
     knownMimers: [],                // nomes já registrados na sessão
     surpriseDone: false,            // se categoria surpresa já disparou nessa rodada
-    actionHistory: []               // últimas ações da rodada — permite voltar 1 palavra
+    actionHistory: [],              // últimas ações da rodada
+    originalCategory: null,         // categoria selecionada antes de surprise (revanche)
+    pauseStart: 0,                  // timestamp da pausa
+    timerInitial: 0,                // duração inicial da rodada em segundos
+    suddenDeathCount: 0,            // quantas mortes súbitas já rolaram (limite)
+    selectionMode: false,           // categorySelect em modo multi-seleção
+    pendingSelection: new Set()     // IDs marcados no modo Mix
   };
 
   // Carrega settings persistidas se existirem
@@ -201,7 +213,7 @@
       if (k === 'class') node.className = v;
       else if (k === 'style' && typeof v === 'object') Object.assign(node.style, v);
       else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2).toLowerCase(), v);
-      else if (k === 'html') node.innerHTML = v;
+      // Suporte a 'html' removido: evita XSS acidental.
       else if (v === true) node.setAttribute(k, '');
       else if (v !== null && v !== false && v !== undefined) node.setAttribute(k, v);
     });
@@ -303,11 +315,11 @@
         const a = new Audio(url);
         a.preload = 'auto';
         a.addEventListener('error', () => {
-          console.warn('[Gesto] Falhou carregar áudio:', file, 'URL:', url);
+          dwarn('[Gesto] Falhou carregar áudio:', file, 'URL:', url);
           showToast('Áudio falhou: ' + file, 2400);
         });
         a.addEventListener('canplaythrough', () => {
-          console.log('[Gesto] Áudio pronto:', file);
+          dlog('[Gesto] Áudio pronto:', file);
         }, { once: true });
         _panelaAudio[key] = a;
       }
@@ -317,14 +329,14 @@
       a.loop = !!opts.loop;
       const p = a.play();
       if (p && typeof p.then === 'function') {
-        p.then(() => console.log('[Gesto] Tocando:', key))
+        p.then(() => dlog('[Gesto] Tocando:', key))
          .catch((err) => {
-           console.warn('[Gesto] Play bloqueado:', key, err && err.message);
+           dwarn('[Gesto] Play bloqueado:', key, err && err.message);
          });
       }
       return a;
     } catch (e) {
-      console.warn('[Gesto] Erro panelaPlay:', e);
+      dwarn('[Gesto] Erro panelaPlay:', e);
       return false;
     }
   }
@@ -343,16 +355,17 @@
   function ensureAmbient() {
     if (_ambient !== null) return _ambient;
     if (AppState.settings.soundPack !== 'panela') { _ambient = false; return false; }
+    if (!AppState.settings.ambientMusic) { _ambient = false; return false; }
     const file = PANELA_PACK.ambient;
     const url = './' + file.split('/').map(encodeURIComponent).join('/');
     try {
       const a = new Audio(url);
       a.loop = true;
       a.volume = 0;
-      a.preload = 'auto';
+      a.preload = 'metadata';   // lazy: não baixa o MP3 inteiro até dar play
       a.addEventListener('error', () => {
         // arquivo não existe ainda — desativa silenciosamente, sem mostrar toast
-        console.warn('[Gesto] Música ambiente não encontrada (' + file + '). App continua normal.');
+        dwarn('[Gesto] Música ambiente não encontrada (' + file + '). App continua normal.');
         _ambient = false;
       });
       _ambient = a;
@@ -493,7 +506,7 @@
 
       // Procedurais que ficariam em cima de outros sons Panela — mutar quando há conflito
       if (type === 'tick' || type === 'lastone') return;  // Clockfruit já tá rolando
-      if (type === 'count' && AppState.mode === 'teams') return; // ROUND ONE FIGHT cobre o countdown
+      if (type === 'count') return; // ROUND ONE FIGHT cobre o countdown em todos os modos com Panela
       // click/correct/skip/go ainda usam procedural (curtos e leves, não conflitam)
     }
 
@@ -562,8 +575,50 @@
       bestPerCategory: {},
       medals: { Bronze: 0, Prata: 0, Ouro: 0, Lendário: 0 },
       history: [],
-      bestTeam: null
+      bestTeam: null,
+      achievements: [],          // IDs de conquistas
+      teamRoundsPlayed: 0,
+      betsWon: 0,
+      betsLost: 0
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Achievements
+  // -------------------------------------------------------------------------
+  const ACHIEVEMENTS = [
+    { id: 'first-win',   label: 'Primeira vitória',          emoji: '🥳' },
+    { id: 'streak-3',    label: '3 seguidas — esquentou',    emoji: '🔥' },
+    { id: 'streak-10',   label: '10 seguidas — fenômeno',    emoji: '🎯' },
+    { id: 'lendario-3',  label: '3 vitórias lendárias',      emoji: '🏅' },
+    { id: 'no-skip-win', label: 'Vitória limpa (sem pulos)', emoji: '✨' },
+    { id: 'survivor',    label: 'Vitória no fio do bigode',  emoji: '⏱' },
+    { id: 'all-cats',    label: 'Tour completo nas categorias', emoji: '🌎' },
+    { id: 'bet-master',  label: '5 apostas batidas',         emoji: '🎲' },
+    { id: 'mvp-night',   label: 'MVP da Panela',             emoji: '👑' }
+  ];
+
+  function awardAchievement(id) {
+    if (!stats.achievements) stats.achievements = [];
+    if (stats.achievements.includes(id)) return;
+    const def = ACHIEVEMENTS.find((a) => a.id === id);
+    if (!def) return;
+    stats.achievements.push(id);
+    saveStats();
+    setTimeout(() => showToast(def.emoji + ' Conquista: ' + def.label, 2600), 1200);
+  }
+
+  function checkRoundAchievements(result) {
+    if (result !== 'won') return;
+    if (stats.totalWins === 1) awardAchievement('first-win');
+    if (stats.currentStreak === 3) awardAchievement('streak-3');
+    if (stats.currentStreak >= 10) awardAchievement('streak-10');
+    if ((stats.medals && stats.medals['Lendário']) >= 3) awardAchievement('lendario-3');
+    if (AppState.skippedWords.length === 0) awardAchievement('no-skip-win');
+    if (AppState.timeLeft > 0 && AppState.timeLeft <= 2) awardAchievement('survivor');
+    const realCats = Object.keys(stats.categoryCount || {}).filter((id) => id !== 'aleatorio' && !String(id).startsWith('mix:'));
+    if (realCats.length >= 16) awardAchievement('all-cats');
+    if ((stats.betsWon || 0) >= 5) awardAchievement('bet-master');
   }
 
   function saveStats() {
@@ -588,17 +643,51 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Sorteio de palavras
+  // Sorteio de palavras (com warm-up de dificuldade)
   // ---------------------------------------------------------------------------
+  const _DIFF_ORDER = { 'Fácil': 1, 'Médio': 2, 'Difícil': 3, 'Insano': 4 };
+
+  function _wordDifficulty(word, cat) {
+    if (!cat) return 2;
+    if (!cat._sourceMap) return _DIFF_ORDER[cat.difficulty] || 2;
+    const motherId = cat._sourceMap[word];
+    if (!motherId) return 2;
+    const mother = (window.GESTO_CATEGORIES || []).find((c) => c.id === motherId);
+    return mother ? (_DIFF_ORDER[mother.difficulty] || 2) : 2;
+  }
+
   function nextWord() {
     const cat = AppState.selectedCategory;
     if (!cat) return null;
-    const remaining = cat.words.filter((w) => !AppState.usedWords.includes(w));
+
+    let remaining = cat.words.filter((w) => !AppState.usedWords.includes(w) && w !== AppState.currentWord);
     if (remaining.length === 0) {
-      // Reseta usedWords mantendo a atual fora — situação rara, categoria pequena.
-      AppState.usedWords = [];
-      return pick(cat.words);
+      AppState.usedWords = AppState.currentWord ? [AppState.currentWord] : [];
+      remaining = cat.words.filter((w) => w !== AppState.currentWord);
+      if (remaining.length === 0) return pick(cat.words);
     }
+
+    const level = AppState.settings.difficultyLevel || 'mixed';
+    if (cat._sourceMap) {
+      let pool;
+      if (level === 'soft') {
+        pool = remaining.filter((w) => _wordDifficulty(w, cat) <= 2);
+        if (pool.length >= 6) remaining = pool;
+      } else if (level === 'hard') {
+        pool = remaining.filter((w) => _wordDifficulty(w, cat) >= 2);
+        if (pool.length >= 6) remaining = pool;
+      }
+    }
+
+    // Warm-up: nas 2 primeiras palavras, prefere as fáceis disponíveis
+    const wordsPlayed = (AppState.correctWords.length + AppState.skippedWords.length);
+    if (wordsPlayed < 2 && cat._sourceMap && level !== 'hard') {
+      const easyPool = remaining.filter((w) => _wordDifficulty(w, cat) === 1);
+      if (easyPool.length >= 3) return pick(easyPool);
+      const mediumPool = remaining.filter((w) => _wordDifficulty(w, cat) <= 2);
+      if (mediumPool.length >= 3) return pick(mediumPool);
+    }
+
     return pick(remaining);
   }
 
@@ -629,60 +718,65 @@
   // ---------------------------------------------------------------------------
   function startTimer() {
     stopTimer();
+    // Timer timestamp-based — imune a drift do setInterval
     AppState.timerStart = Date.now();
-    let lastTick = AppState.timeLeft;
+    AppState.timerInitial = AppState.timeLeft;
+    let lastTickPlayed = -1;
     let heatStarted = false;
-    // (E) Categoria surpresa: decide gatilho aleatório nessa rodada
+
     const surpriseEnabled =
       AppState.settings.surpriseCategory &&
       !AppState.surpriseDone &&
       !AppState.suddenDeath &&
+      !AppState.bet &&
       AppState.roundDuration >= 45 &&
       Math.random() < 0.35;
-    // dispara entre 60% e 50% da duração
     const surpriseAt = surpriseEnabled
-      ? Math.floor(AppState.roundDuration * (0.50 + Math.random() * 0.10))
+      ? Math.floor(AppState.timerInitial * (0.50 + Math.random() * 0.10))
       : -1;
+
     AppState.timerId = setInterval(() => {
       if (AppState.roundStatus !== 'playing') return;
-      AppState.timeLeft = Math.max(0, AppState.timeLeft - 1);
 
-      // dispara categoria surpresa se chegou na hora e ainda sobram >=15s
-      if (surpriseEnabled && AppState.timeLeft === surpriseAt && AppState.timeLeft >= 15 && !AppState.surpriseDone) {
+      const elapsedMs = Date.now() - AppState.timerStart;
+      const remaining = Math.max(0, Math.ceil(AppState.timerInitial - elapsedMs / 1000));
+      AppState.timeLeft = remaining;
+
+      if (surpriseEnabled && remaining === surpriseAt && remaining >= 15 && !AppState.surpriseDone) {
         AppState.surpriseDone = true;
         triggerSurprise();
       }
+
       const tEl = $('#timerText');
       const bar = $('#timerBarFill');
       if (tEl) {
-        tEl.textContent = fmtTime(AppState.timeLeft);
-        tEl.classList.toggle('pulse', AppState.timeLeft <= 10 && AppState.timeLeft > 0);
+        tEl.textContent = fmtTime(remaining);
+        tEl.classList.toggle('pulse', remaining <= 10 && remaining > 0);
       }
       if (bar) {
-        const pct = AppState.timeLeft / AppState.roundDuration;
+        const pct = remaining / AppState.timerInitial;
         bar.style.transform = `scaleX(${pct})`;
-        bar.classList.toggle('warning', AppState.timeLeft <= 15 && AppState.timeLeft > 5);
-        bar.classList.toggle('danger', AppState.timeLeft <= 5);
+        bar.classList.toggle('warning', remaining <= 15 && remaining > 5);
+        bar.classList.toggle('danger', remaining <= 5);
       }
       const gs = $('#gameScreen');
-      if (gs) gs.classList.toggle('heat', AppState.timeLeft <= 10 && AppState.timeLeft > 0);
+      if (gs) gs.classList.toggle('heat', remaining <= 10 && remaining > 0);
 
-      // Inicia loop de tensão Panela (Clockfruit Panic) nos últimos 10s
-      if (AppState.timeLeft === 10 && !heatStarted) {
+      if (remaining <= 10 && remaining > 0 && !heatStarted) {
         playSound('heatStart');
         heatStarted = true;
       }
 
-      if (AppState.timeLeft <= 5 && AppState.timeLeft > 0 && AppState.timeLeft !== lastTick) {
+      if (remaining <= 5 && remaining > 0 && remaining !== lastTickPlayed) {
         playSound('tick');
+        lastTickPlayed = remaining;
       }
-      lastTick = AppState.timeLeft;
 
-      if (AppState.timeLeft <= 0) {
+      if (remaining <= 0) {
         playSound('heatStop');
         endRound('time');
       }
-    }, 1000);
+    }, 200);
   }
 
   function stopTimer() {
@@ -799,7 +893,7 @@
     vibrate('skip');
     AppState.skippedWords.push(AppState.currentWord);
     AppState.skipsLeft -= 1;
-    AppState.combo = 0;     // quebra o combo
+    // Pulo é decisão neutra — NÃO reseta o combo. Reset só ao fim da rodada.
     flash('flash-skip');
     animateWordTransition('skip', () => {
       advanceWord();
@@ -814,6 +908,11 @@
     const candidates = all.filter((c) => c.id !== currentId);
     if (candidates.length === 0) return;
     const next = candidates[Math.floor(Math.random() * candidates.length)];
+
+    // Guarda a categoria original — usada na revanche e nas stats
+    if (!AppState.originalCategory) {
+      AppState.originalCategory = AppState.selectedCategory;
+    }
 
     // Pausa logicamente, mostra overlay
     const prevStatus = AppState.roundStatus;
@@ -928,8 +1027,7 @@
     AppState.currentChallenge = last.challenge;
     AppState.usedWords.push(last.word);
 
-    // Limpa o histórico — só permite voltar 1 vez consecutiva (anti-abuso)
-    AppState.actionHistory = [];
+    // Permite até 5 undos consecutivos (limite do actionHistory)
 
     playSound('click');
     vibrate('tap');
@@ -949,16 +1047,70 @@
   function pauseRound() {
     if (AppState.roundStatus !== 'playing') return;
     AppState.roundStatus = 'paused';
+    AppState.pauseStart = Date.now();
     stopTimer();
-    panelaStop('heat');   // Bug 3: garante silêncio durante a pausa
+    panelaStop('heat');
     showPauseOverlay();
   }
 
   function resumeRound() {
     if (AppState.roundStatus !== 'paused') return;
+    const pauseDuration = AppState.pauseStart ? (Date.now() - AppState.pauseStart) : 0;
+    if (pauseDuration > 5000) {
+      hidePauseOverlay();
+      showResumeCountdown(() => {
+        AppState.roundStatus = 'playing';
+        const elapsedBeforePause = (AppState.pauseStart - AppState.timerStart) / 1000;
+        AppState.timerStart = Date.now() - (elapsedBeforePause * 1000);
+        AppState.pauseStart = 0;
+        startTimer();
+      });
+      return;
+    }
     AppState.roundStatus = 'playing';
+    if (AppState.pauseStart && AppState.timerStart) {
+      const elapsedBeforePause = (AppState.pauseStart - AppState.timerStart) / 1000;
+      AppState.timerStart = Date.now() - (elapsedBeforePause * 1000);
+    }
+    AppState.pauseStart = 0;
     hidePauseOverlay();
     startTimer();
+  }
+
+  function showResumeCountdown(onDone) {
+    const gs = $('#gameScreen');
+    if (!gs) { onDone(); return; }
+    const overlay = el('div', { class: 'resume-countdown', id: 'resumeCountdown' },
+      el('div', { class: 'countdown-number' }, '3')
+    );
+    gs.appendChild(overlay);
+    const num = overlay.querySelector('.countdown-number');
+    let n = 3;
+    playSound('count');
+    const t = setInterval(() => {
+      n -= 1;
+      if (n <= 0) {
+        clearInterval(t);
+        overlay.remove();
+        playSound('go');
+        onDone();
+        return;
+      }
+      num.textContent = n;
+      playSound('count');
+    }, 800);
+  }
+
+  function peekWord() {
+    const wd = $('#wordDisplay');
+    if (!wd) return;
+    wd.style.visibility = '';
+    showToast('👁 ' + (AppState.currentWord || '—'), 2000);
+    setTimeout(() => {
+      if (AppState.roundStatus === 'paused') {
+        wd.style.visibility = 'hidden';
+      }
+    }, 2000);
   }
 
   function endRound(reason) {
@@ -983,12 +1135,13 @@
       if (AppState.timeLeft > stats.bestTimeLeft) stats.bestTimeLeft = AppState.timeLeft;
       const medal = getPerformanceMedal(AppState.timeLeft);
       if (medal) stats.medals[medal] = (stats.medals[medal] || 0) + 1;
-      // Melhor rodada por categoria
-      const catId = AppState.selectedCategory.id;
+      // Melhor rodada por categoria — usa categoria ORIGINAL (antes da surprise)
+      const statCat = AppState.originalCategory || AppState.selectedCategory;
+      const catId = statCat.id;
       const prev = stats.bestPerCategory[catId];
-      if (!prev || AppState.timeLeft > prev.timeLeft) {
+      if (!prev || AppState.timeLeft >= prev.timeLeft) {
         stats.bestPerCategory[catId] = {
-          name: AppState.selectedCategory.name,
+          name: statCat.name,
           timeLeft: AppState.timeLeft,
           score: AppState.score,
           when: Date.now()
@@ -1000,17 +1153,35 @@
     }
     stats.totalCorrect += AppState.correctWords.length;
     stats.totalSkips += AppState.skippedWords.length;
-    const cId = AppState.selectedCategory.id;
-    stats.categoryCount[cId] = (stats.categoryCount[cId] || 0) + 1;
+    const statCat2 = AppState.originalCategory || AppState.selectedCategory;
+    const cId = statCat2.id;
+    // Ignora 'aleatorio' e 'mix:*' do favorito de categorias
+    if (cId !== 'aleatorio' && !String(cId).startsWith('mix:')) {
+      stats.categoryCount[cId] = (stats.categoryCount[cId] || 0) + 1;
+    }
     stats.history.unshift({
       when: Date.now(),
-      category: AppState.selectedCategory.name,
+      category: statCat2.name,
       score: AppState.score,
       result,
       timeLeft: AppState.timeLeft
     });
     if (stats.history.length > 10) stats.history.length = 10;
+
+    // Conta apostas do modo Times
+    if (AppState.mode === 'teams' && AppState.bet) {
+      if (AppState.correctWords.length >= AppState.bet) {
+        stats.betsWon = (stats.betsWon || 0) + 1;
+      } else {
+        stats.betsLost = (stats.betsLost || 0) + 1;
+      }
+    }
+    if (AppState.mode === 'teams') {
+      stats.teamRoundsPlayed = (stats.teamRoundsPlayed || 0) + 1;
+    }
     saveStats();
+
+    checkRoundAchievements(result);
 
     // Atualiza histórico de sessão de times
     if (AppState.mode === 'teams') {
@@ -1070,23 +1241,30 @@
   // ---------------------------------------------------------------------------
   // Modo times — fluxo
   // ---------------------------------------------------------------------------
+  function makeTeam(i) {
+    return {
+      name: DEFAULT_TEAM_NAMES[i] || ('Time ' + (i + 1)),
+      color: TEAM_COLORS[i % TEAM_COLORS.length],
+      points: 0,
+      wins: 0,
+      losses: 0,
+      played: 0,
+      skips: 0,
+      correctTotal: 0,
+      bestTimeLeft: 0,
+      lastMimer: null,
+      mimers: []
+    };
+  }
+
   function createTeams(count) {
     AppState.teams = [];
     for (let i = 0; i < count; i++) {
-      AppState.teams.push({
-        name: DEFAULT_TEAM_NAMES[i] || ('Time ' + (i + 1)),
-        color: TEAM_COLORS[i % TEAM_COLORS.length],
-        points: 0,
-        wins: 0,
-        losses: 0,
-        played: 0,
-        skips: 0,
-        correctTotal: 0,
-        bestTimeLeft: 0
-      });
+      AppState.teams.push(makeTeam(i));
     }
     AppState.currentTeamIndex = 0;
     AppState.currentRound = 1;
+    AppState.suddenDeathCount = 0;
     AppState.sessionHistory = [];
   }
 
@@ -1173,10 +1351,26 @@
   function finishTeamGame() {
     const top = Math.max(...AppState.teams.map((t) => t.points));
     const tiedLeaders = AppState.teams.filter((t) => t.points === top);
-    if (tiedLeaders.length > 1 && !AppState.suddenDeath) {
+
+    // Limite de mortes súbitas — após 3, decide por tiebreaker absoluto
+    if (tiedLeaders.length > 1 && AppState.suddenDeathCount >= 3) {
+      const ordered = tiedLeaders.slice().sort((a, b) => {
+        if (b.correctTotal !== a.correctTotal) return b.correctTotal - a.correctTotal;
+        if (a.skips !== b.skips) return a.skips - b.skips;
+        return Math.random() - 0.5;
+      });
+      ordered[0].points += 1;
+      AppState.suddenDeath = false;
+      showToast('Desempate decidido por estatísticas — chega de empate!', 2400);
+      navigate('gameEnd');
+      return;
+    }
+
+    if (tiedLeaders.length > 1) {
       AppState.suddenDeath = true;
+      AppState.suddenDeathCount = (AppState.suddenDeathCount || 0) + 1;
       AppState.currentTeamIndex = AppState.teams.findIndex((t) => t.points === top);
-      playSound('sudden');     // Neon Gavel cai aqui
+      playSound('sudden');
       vibrate('sudden');
       navigate('scoreboard');
       return;
@@ -1249,8 +1443,9 @@
     if (pauseOverlay) pauseOverlay.remove();
     const surpriseOverlay = document.getElementById('surpriseOverlay');
     if (surpriseOverlay) surpriseOverlay.remove();
+    const resumeOverlay = document.getElementById('resumeCountdown');
+    if (resumeOverlay) resumeOverlay.remove();
 
-    // Reset do lock de transição
     _transitioning = false;
 
     // Garante stop do heat loop quando saindo de tela de jogo
@@ -1362,8 +1557,16 @@
       )
     );
 
+    // Rodapé legal — link pra privacy/terms
+    const legalFooter = el('div', { class: 'legal-footer' },
+      el('a', { href: './privacy.html', class: 'legal-link' }, 'Privacidade'),
+      el('span', { class: 'legal-dot' }, '·'),
+      el('a', { href: './terms.html', class: 'legal-link' }, 'Termos')
+    );
+
     screen.appendChild(hero);
     screen.appendChild(actions);
+    screen.appendChild(legalFooter);
     root().appendChild(screen);
   }
 
@@ -1402,25 +1605,103 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Render: CATEGORY SELECT
+  // Render: CATEGORY SELECT (multi-seleção + presets)
   // ---------------------------------------------------------------------------
   function renderCategorySelect() {
     root().innerHTML = '';
     const cats = getAllCategories();
+    const inMix = AppState.selectionMode;
+
+    let lastMix = null;
+    try {
+      const raw = localStorage.getItem('gesto.lastmix.v1');
+      if (raw) lastMix = JSON.parse(raw);
+    } catch (e) { /* ignora */ }
+
     const screen = el('div', { class: 'screen' },
-      topbar('Escolha a categoria', () => navigate('home')),
-      el('div', { class: 'category-grid' },
-        el('button', { class: 'category-card featured', onClick: () => pickCat('aleatorio') },
-          el('div', { class: 'emoji' }, '🎲'),
-          el('h3', { class: 'cat-name' }, 'Misturar tudo'),
-          el('p', { class: 'cat-desc' }, 'Sorteia de todas as categorias.'),
-          el('div', { class: 'cat-meta' },
-            el('span', { class: 'diff' }, 'Variado'),
-            el('span', {}, totalWordCount() + ' palavras')
+      topbar(inMix ? 'Monte seu mix' : 'Escolha a categoria', () => {
+        if (inMix) {
+          AppState.selectionMode = false;
+          AppState.pendingSelection.clear();
+          renderCategorySelect();
+        } else {
+          navigate('home');
+        }
+      }),
+
+      !inMix && el('div', { class: 'cat-top-actions' },
+        el('button', {
+          class: 'btn btn-primary btn-block',
+          onClick: () => { tap(); pickCat('aleatorio'); }
+        }, '🎲 Misturar tudo (' + totalWordCount() + ' palavras)'),
+        el('button', {
+          class: 'btn btn-secondary btn-block',
+          style: { marginTop: '8px' },
+          onClick: () => {
+            tap();
+            AppState.selectionMode = true;
+            AppState.pendingSelection.clear();
+            renderCategorySelect();
+          }
+        }, '🍳 Misturar várias (escolher 2+)'),
+        lastMix && lastMix.ids && lastMix.ids.length > 1 && el('button', {
+          class: 'btn btn-ghost btn-block',
+          style: { marginTop: '6px', fontSize: '13px' },
+          onClick: () => {
+            tap();
+            const mixCat = window.GESTO_BUILD_MIX(lastMix.ids, lastMix.label || null);
+            if (mixCat) {
+              AppState.selectedCategory = mixCat;
+              navigate('roundSetup');
+            }
+          }
+        }, '↺ Seu último mix: ' + (lastMix.label || (lastMix.ids.length + ' categorias')))
+      ),
+
+      !inMix && el('div', { class: 'preset-row' },
+        el('div', { class: 'preset-label' }, 'Presets prontos'),
+        el('div', { class: 'preset-scroll' },
+          ...(window.GESTO_MIX_PRESETS || []).map((p) =>
+            el('button', {
+              class: 'preset-chip',
+              onClick: () => { tap(); applyPreset(p); }
+            }, p.label)
           )
+        )
+      ),
+
+      inMix && el('div', { class: 'mix-status' },
+        el('div', { class: 'mix-counter' },
+          AppState.pendingSelection.size + ' selecionada' + (AppState.pendingSelection.size !== 1 ? 's' : '') +
+          ' • ' + mixWordCount(Array.from(AppState.pendingSelection)) + ' palavras'
         ),
-        ...cats.map((c) =>
-          el('button', { class: 'category-card', onClick: () => pickCat(c.id) },
+        AppState.pendingSelection.size > 0 && el('button', {
+          class: 'mix-clear',
+          onClick: () => {
+            tap();
+            AppState.pendingSelection.clear();
+            renderCategorySelect();
+          }
+        }, 'Limpar')
+      ),
+
+      el('div', { class: 'category-grid' },
+        ...cats.map((c) => {
+          const selected = AppState.pendingSelection.has(c.id);
+          return el('button', {
+            class: 'category-card' + (inMix && selected ? ' selected' : ''),
+            onClick: () => {
+              if (inMix) {
+                tap();
+                if (selected) AppState.pendingSelection.delete(c.id);
+                else AppState.pendingSelection.add(c.id);
+                renderCategorySelect();
+              } else {
+                pickCat(c.id);
+              }
+            }
+          },
+            inMix && el('div', { class: 'card-check' + (selected ? ' on' : '') }, selected ? '✓' : ''),
             el('div', { class: 'emoji' }, c.emoji || '🎯'),
             el('h3', { class: 'cat-name' }, c.name),
             el('p', { class: 'cat-desc' }, c.description),
@@ -1428,11 +1709,68 @@
               el('span', { class: 'diff' }, c.difficulty),
               el('span', {}, c.words.length + ' palavras')
             )
-          )
+          );
+        })
+      ),
+
+      inMix && el('div', { class: 'mix-cta' },
+        el('button', {
+          class: 'btn btn-primary btn-block',
+          disabled: AppState.pendingSelection.size < 1,
+          onClick: () => {
+            if (AppState.pendingSelection.size < 1) return;
+            tap();
+            confirmMixSelection();
+          }
+        },
+          AppState.pendingSelection.size < 1
+            ? 'Selecione pelo menos 1'
+            : (AppState.pendingSelection.size === 1
+                ? 'Jogar com 1 categoria'
+                : 'Jogar com ' + AppState.pendingSelection.size + ' categorias')
         )
       )
     );
     root().appendChild(screen);
+  }
+
+  function applyPreset(preset) {
+    if (!preset || !preset.ids || preset.ids.length === 0) return;
+    const mixCat = window.GESTO_BUILD_MIX(preset.ids, preset.label);
+    if (!mixCat) { showToast('Preset indisponível', 1600); return; }
+    AppState.selectedCategory = mixCat;
+    try {
+      localStorage.setItem('gesto.lastmix.v1', JSON.stringify({ ids: preset.ids, label: preset.label }));
+    } catch (e) { /* quota */ }
+    navigate('roundSetup');
+  }
+
+  function confirmMixSelection() {
+    const ids = Array.from(AppState.pendingSelection);
+    if (ids.length === 0) return;
+    const mixCat = window.GESTO_BUILD_MIX(ids);
+    if (!mixCat) return;
+    AppState.selectedCategory = mixCat;
+    if (ids.length > 1) {
+      try {
+        localStorage.setItem('gesto.lastmix.v1', JSON.stringify({ ids: ids, label: null }));
+      } catch (e) { /* quota */ }
+    }
+    AppState.selectionMode = false;
+    AppState.pendingSelection.clear();
+    navigate('roundSetup');
+  }
+
+  function mixWordCount(ids) {
+    if (!ids || ids.length === 0) return 0;
+    const seen = Object.create(null);
+    let count = 0;
+    ids.forEach((id) => {
+      const c = getAllCategories().find((x) => x.id === id);
+      if (!c) return;
+      c.words.forEach((w) => { if (!seen[w]) { seen[w] = 1; count += 1; } });
+    });
+    return count;
   }
 
   function pickCat(id) {
@@ -1485,6 +1823,37 @@
               onClick: () => { tap(); AppState.roundDuration = s; AppState.timeLeft = s; renderRoundSetup(); }
             }, s + 's')
           )
+        )
+      ),
+
+      // Nível de dificuldade — só em mix/aleatório
+      cat._sourceMap && el('div', { class: 'setup-section' },
+        el('label', { class: 'setup-label' }, 'Nível das palavras'),
+        el('div', { class: 'chip-row' },
+          ...[
+            { v: 'soft',  label: '🍃 Suave' },
+            { v: 'mixed', label: '🍳 Misto' },
+            { v: 'hard',  label: '🔥 Pesado' }
+          ].map((d) =>
+            el('button', {
+              class: 'chip' + (AppState.settings.difficultyLevel === d.v ? ' active' : ''),
+              onClick: () => {
+                tap();
+                AppState.settings.difficultyLevel = d.v;
+                persistSettings();
+                renderRoundSetup();
+              }
+            }, d.label)
+          )
+        ),
+        el('p', {
+          style: { fontSize: '12px', color: 'var(--text-mute)', margin: '6px 2px 0', letterSpacing: '0.2px' }
+        },
+          AppState.settings.difficultyLevel === 'soft'
+            ? 'Só palavras fáceis/médias. Bom pra família e crianças.'
+            : AppState.settings.difficultyLevel === 'hard'
+              ? 'Mais palavras abstratas e difíceis. Pros corajosos.'
+              : 'Misto. Começa suave, depois libera tudo.'
         )
       ),
 
@@ -1662,11 +2031,7 @@
             if (AppState.teams.length >= 6) return;
             tap();
             const i = AppState.teams.length;
-            AppState.teams.push({
-              name: DEFAULT_TEAM_NAMES[i] || ('Time ' + (i + 1)),
-              color: TEAM_COLORS[i % TEAM_COLORS.length],
-              points: 0, wins: 0, losses: 0, played: 0, skips: 0, correctTotal: 0, bestTimeLeft: 0
-            });
+            AppState.teams.push(makeTeam(i));
             renderTeamSetup();
           }
         }, '+ Time'),
@@ -1692,7 +2057,10 @@
   function renderPreparing() {
     root().innerHTML = '';
     setupNewRound();
-    if (AppState.suddenDeath) AppState.timeLeft = 30;
+    if (AppState.suddenDeath) {
+      // SD escalonada: metade da rodada, clamp [20, 45]
+      AppState.timeLeft = Math.max(20, Math.min(45, Math.floor(AppState.roundDuration / 2)));
+    }
 
     const team = AppState.mode === 'teams' ? AppState.teams[AppState.currentTeamIndex] : null;
     const screen = el('div', { class: 'screen' },
@@ -1748,12 +2116,20 @@
       if (clean) {
         AppState.currentMimer = clean;
         if (!AppState.knownMimers.includes(clean)) AppState.knownMimers.push(clean);
+        if (team) {
+          team.lastMimer = clean;
+          if (!team.mimers) team.mimers = [];
+          if (!team.mimers.includes(clean)) team.mimers.push(clean);
+        }
       } else {
         AppState.currentMimer = null;
       }
       tap();
       navigate('countdown');
     }
+
+    const lastMimer = team && team.lastMimer;
+    const teamMimers = team && team.mimers ? team.mimers : [];
 
     const screen = el('div', { class: 'screen' },
       topbar('Quem vai mimicar?', () =>
@@ -1764,10 +2140,31 @@
 
       team && el('div', { class: 'prepare-team-badge', style: { alignSelf: 'center', marginBottom: '14px' } }, team.name),
 
-      AppState.knownMimers.length > 0 && el('div', { class: 'setup-section' },
-        el('label', { class: 'setup-label' }, 'Já mimicaram'),
+      lastMimer && el('div', { class: 'card', style: { marginBottom: '14px', textAlign: 'center' } },
+        el('div', { style: { fontSize: '12px', color: 'var(--text-mute)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '1px' } }, 'Último mímico do time'),
+        el('button', {
+          class: 'btn btn-primary',
+          style: { minWidth: '240px' },
+          onClick: () => commit(lastMimer)
+        }, '↺ Continuar com ' + lastMimer)
+      ),
+
+      teamMimers.length > 0 && el('div', { class: 'setup-section' },
+        el('label', { class: 'setup-label' }, 'Já mimicaram nesse time'),
         el('div', { class: 'chip-row' },
-          ...AppState.knownMimers.map((name) =>
+          ...teamMimers.map((name) =>
+            el('button', {
+              class: 'chip' + (name === lastMimer ? ' active' : ''),
+              onClick: () => commit(name)
+            }, name)
+          )
+        )
+      ),
+
+      AppState.knownMimers.length > 0 && AppState.knownMimers.filter((n) => !teamMimers.includes(n)).length > 0 && el('div', { class: 'setup-section' },
+        el('label', { class: 'setup-label' }, 'Outros mímicos da noite'),
+        el('div', { class: 'chip-row' },
+          ...AppState.knownMimers.filter((n) => !teamMimers.includes(n)).map((name) =>
             el('button', {
               class: 'chip',
               onClick: () => commit(name)
@@ -1792,7 +2189,7 @@
         el('button', {
           class: 'btn btn-primary',
           onClick: () => commit(inputValue)
-        }, 'Confirmar'),
+        }, 'Confirmar novo'),
         el('button', {
           class: 'btn btn-ghost',
           onClick: () => commit('')
@@ -1866,8 +2263,8 @@
     screen.appendChild(wrap);
     root().appendChild(screen);
 
-    // ROUND ONE FIGHT estilo Mortal Kombat — toca quando pacote Panela ativo + modo Times
-    if (AppState.mode === 'teams' && AppState.settings.soundPack === 'panela') {
+    // ROUND ONE FIGHT estilo Mortal Kombat — toca em qualquer modo com pacote Panela
+    if (AppState.settings.soundPack === 'panela') {
       playSound('round1');
     }
     playSound('count');
@@ -1897,7 +2294,8 @@
     const cat = AppState.selectedCategory;
     const team = AppState.mode === 'teams' ? AppState.teams[AppState.currentTeamIndex] : null;
 
-    const canUndo = AppState.actionHistory && AppState.actionHistory.length > 0;
+    const headerSlotWrap = el('div', { id: 'headerRightSlot', class: 'header-right-slot' });
+    headerSlotWrap.appendChild(buildHeaderRightSlot());
 
     const screen = el('div', { class: 'game-screen', id: 'gameScreen' },
       el('div', { class: 'game-header' },
@@ -1909,22 +2307,7 @@
         el('div', { class: 'game-category-pill', id: 'gameCategoryPill' },
           (team ? team.name + ' • ' : '') + (cat ? cat.name : '')
         ),
-        canUndo
-          ? el('button', {
-              class: 'undo-btn',
-              'aria-label': 'Voltar para a palavra anterior',
-              onClick: () => { undoLastAction(); }
-            }, '↶ Voltar')
-          : (AppState.bet
-              ? el('div', {
-                  class: 'bet-pill',
-                  role: 'status',
-                  'aria-label': 'Apostou ' + AppState.bet + ' acertos'
-                },
-                  el('span', { 'aria-hidden': 'true' }, '🎲 '), AppState.bet
-                )
-              : el('div', { style: { width: '0' } })
-            )
+        headerSlotWrap
       ),
       el('div', { class: 'timer-bar-wrap' },
         el('div', { class: 'timer-bar-fill', id: 'timerBarFill', style: { transform: 'scaleX(1)' } })
@@ -1946,6 +2329,50 @@
       buildActionRow()
     );
     root().appendChild(screen);
+  }
+
+  // Slot direito do header — Voltar OU bet-pill OU vazio. Re-renderiza a cada ação.
+  function buildHeaderRightSlot() {
+    const canUndo = AppState.actionHistory && AppState.actionHistory.length > 0;
+    const betAchieved = AppState.bet && AppState.correctWords.length >= AppState.bet;
+    if (canUndo) {
+      const undoCount = AppState.actionHistory.length;
+      const wrap = el('div', { class: 'header-right-stack' });
+      wrap.appendChild(el('button', {
+        class: 'undo-btn',
+        'aria-label': 'Voltar para a palavra anterior',
+        onClick: () => { undoLastAction(); }
+      }, '↶ Voltar' + (undoCount > 1 ? ' (' + undoCount + ')' : '')));
+      if (AppState.bet) {
+        wrap.appendChild(el('div', {
+          class: 'bet-pill mini' + (betAchieved ? ' achieved' : ''),
+          role: 'status',
+          'aria-label': 'Apostou ' + AppState.bet + ' acertos' + (betAchieved ? ' — cumprida' : '')
+        },
+          el('span', { 'aria-hidden': 'true' }, betAchieved ? '✅ ' : '🎲 '),
+          AppState.bet
+        ));
+      }
+      return wrap;
+    }
+    if (AppState.bet) {
+      return el('div', {
+        class: 'bet-pill' + (betAchieved ? ' achieved' : ''),
+        role: 'status',
+        'aria-label': 'Apostou ' + AppState.bet + ' acertos' + (betAchieved ? ' — cumprida' : '')
+      },
+        el('span', { 'aria-hidden': 'true' }, betAchieved ? '✅ ' : '🎲 '),
+        AppState.bet
+      );
+    }
+    return el('div', { style: { width: '0' } });
+  }
+
+  function updateHeaderRightSlot() {
+    const slot = document.getElementById('headerRightSlot');
+    if (!slot) return;
+    slot.innerHTML = '';
+    slot.appendChild(buildHeaderRightSlot());
   }
 
   // Botões PULAR/ACERTOU como uma fábrica isolada
@@ -1982,6 +2409,8 @@
     if (oldActions && oldActions.parentNode) {
       oldActions.parentNode.replaceChild(buildActionRow(), oldActions);
     }
+    // Atualiza slot direito do header (botão Voltar / aposta) — antes ficava invisível
+    updateHeaderRightSlot();
   }
 
   function renderProgressPill() {
@@ -2054,6 +2483,10 @@
         class: 'btn btn-primary', style: { minWidth: '260px', marginTop: '14px' },
         onClick: () => { tap(); resumeRound(); }
       }, '▶ Continuar'),
+      el('button', {
+        class: 'btn btn-ghost', style: { minWidth: '260px', fontSize: '13px' },
+        onClick: () => { tap(); peekWord(); }
+      }, '👁 Ver palavra (só pra mim, 2s)'),
       el('button', {
         class: 'btn btn-secondary', style: { minWidth: '260px' },
         onClick: () => {
@@ -2191,10 +2624,28 @@
       );
     }
     return el('div', { class: 'result-actions' },
-      el('button', { class: 'btn btn-primary', onClick: () => { tap(); navigate('preparing'); } }, 'Revanche'),
+      el('button', {
+        class: 'btn btn-primary',
+        onClick: () => {
+          tap();
+          if (AppState.originalCategory) {
+            AppState.selectedCategory = AppState.originalCategory;
+            AppState.originalCategory = null;
+          }
+          navigate('preparing');
+        }
+      }, 'Revanche'),
       el('div', { class: 'btn-row' },
-        el('button', { class: 'btn btn-secondary', onClick: () => { tap(); AppState.selectedCategory = window.GESTO_BUILD_RANDOM(); navigate('preparing'); } }, 'Aleatória'),
-        el('button', { class: 'btn btn-secondary', onClick: () => { tap(); navigate('categorySelect'); } }, 'Trocar')
+        el('button', {
+          class: 'btn btn-secondary',
+          onClick: () => {
+            tap();
+            AppState.selectedCategory = window.GESTO_BUILD_RANDOM();
+            AppState.originalCategory = null;
+            navigate('preparing');
+          }
+        }, 'Aleatória'),
+        el('button', { class: 'btn btn-secondary', onClick: () => { tap(); AppState.originalCategory = null; navigate('categorySelect'); } }, 'Trocar')
       ),
       el('div', { class: 'btn-row' },
         el('button', { class: 'btn btn-ghost', onClick: () => { tap(); shareResult(); } }, 'Compartilhar'),
@@ -2221,7 +2672,14 @@
     const fmt = ROUND_FORMATS.find((f) => f.id === AppState.roundFormat);
 
     const screen = el('div', { class: 'screen' },
-      topbar(AppState.suddenDeath ? 'Morte súbita' : 'Placar', () => navigate('home')),
+      topbar(AppState.suddenDeath ? 'Morte súbita' : 'Placar', () => {
+        if (confirm('Sair do jogo de times? Você perde o placar atual.')) {
+          AppState.teams = [];
+          AppState.mode = 'quick';
+          AppState.suddenDeath = false;
+          navigate('home');
+        }
+      }),
 
       AppState.suddenDeath && el('div', { class: 'sudden-death-banner' }, '⚡ MORTE SÚBITA ⚡'),
 
@@ -2232,7 +2690,7 @@
               + (t.points === leader.points ? ' leader' : '')
               + (t._idx === AppState.currentTeamIndex ? ' current' : '')
           },
-            el('div', { class: 'badge', style: { background: t.color } }, t.name.slice(0, 2).toUpperCase()),
+            el('div', { class: 'badge', style: { background: t.color } }, teamInitials(t.name)),
             el('div', { class: 'info' },
               el('div', { class: 'name' }, t.name),
               el('div', { class: 'stat' },
@@ -2344,6 +2802,7 @@
       stats.bestTeam = { name: winner.name, wins: winner.wins, when: Date.now() };
       saveStats();
     }
+    if (mvpMimer) awardAchievement('mvp-night');
 
     const screen = el('div', { class: 'screen' },
       topbar('Fim de jogo', () => navigate('home')),
@@ -2356,7 +2815,7 @@
       el('div', { class: 'scoreboard' },
         ...sorted.map((t, i) =>
           el('div', { class: 'team-score-card' + (i === 0 ? ' leader' : '') },
-            el('div', { class: 'badge', style: { background: t.color } }, t.name.slice(0, 2).toUpperCase()),
+            el('div', { class: 'badge', style: { background: t.color } }, teamInitials(t.name)),
             el('div', { class: 'info' },
               el('div', { class: 'name' }, t.name),
               el('div', { class: 'stat' }, t.wins + 'V • ' + t.losses + 'D • ' + t.skips + ' pulos')
@@ -2417,6 +2876,7 @@
     AppState.currentRound = 1;
     AppState.sessionHistory = [];
     AppState.suddenDeath = false;
+    AppState.suddenDeathCount = 0;
   }
 
   // ---------------------------------------------------------------------------
@@ -2492,6 +2952,20 @@
           medalChip('Lendário', stats.medals.Lendário)
         ),
 
+        el('div', { class: 'words-list-title' }, 'Conquistas (' + ((stats.achievements && stats.achievements.length) || 0) + '/' + ACHIEVEMENTS.length + ')'),
+        el('div', { class: 'achievements-grid' },
+          ...ACHIEVEMENTS.map((a) => {
+            const got = stats.achievements && stats.achievements.includes(a.id);
+            return el('div', {
+              class: 'achievement' + (got ? ' got' : ' locked'),
+              title: a.label
+            },
+              el('span', { class: 'ach-emoji' }, got ? a.emoji : '🔒'),
+              el('span', { class: 'ach-label' }, a.label)
+            );
+          })
+        ),
+
         stats.history.length > 0 && el('div', {},
           el('div', { class: 'words-list-title' }, 'Últimas rodadas'),
           el('ul', { class: 'history-list' },
@@ -2549,6 +3023,18 @@
 
   function tap() { playSound('click'); vibrate('tap'); }
 
+  // Iniciais de time Unicode-aware (não corta meio-emoji)
+  function teamInitials(name) {
+    const s = String(name || '').trim();
+    if (!s) return '?';
+    const parts = s.split(/\s+/);
+    const chars0 = Array.from(parts[0] || '');
+    const chars1 = Array.from(parts[1] || '');
+    const first  = chars0[0] || '?';
+    const second = chars1[0] || chars0[1] || '';
+    return (first + second).toUpperCase();
+  }
+
   // ---------------------------------------------------------------------------
   // Teclado (desktop)
   // ---------------------------------------------------------------------------
@@ -2559,6 +3045,9 @@
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const old = document.getElementById('confettiCanvas');
     if (old) old.remove();
+
+    // Adapta quantidade ao hardware — celulares fracos não engasgam
+    const hwCount = (navigator.hardwareConcurrency || 4) < 4 ? Math.min(count, 50) : count;
 
     const canvas = document.createElement('canvas');
     canvas.id = 'confettiCanvas';
@@ -2577,7 +3066,7 @@
       : ['#7b3df0', '#34e89e', '#ffd166', '#ff7a3d', '#ff4d6d', '#9d6bff'];
 
     const parts = [];
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < hwCount; i++) {
       parts.push({
         x: Math.random() * W,
         y: -20 - Math.random() * H * 0.5,
@@ -2631,6 +3120,8 @@
           e.preventDefault(); skipWord();
         } else if (e.code === 'Escape') {
           e.preventDefault(); pauseRound();
+        } else if (e.code === 'KeyZ' || e.code === 'Backspace') {
+          e.preventDefault(); undoLastAction();
         }
       } else if (AppState.roundStatus === 'paused' && (e.code === 'Enter' || e.code === 'Escape')) {
         e.preventDefault(); resumeRound();
@@ -2645,25 +3136,36 @@
   // Init
   // ---------------------------------------------------------------------------
   function initApp() {
-    // destrava áudio no primeiro toque
-    const unlock = () => { ensureAudio(); document.removeEventListener('touchstart', unlock); document.removeEventListener('click', unlock); };
+    // destrava áudio no primeiro toque (touch/pointer/click)
+    const unlock = () => {
+      ensureAudio();
+      document.removeEventListener('touchstart', unlock);
+      document.removeEventListener('pointerdown', unlock);
+      document.removeEventListener('click', unlock);
+    };
     document.addEventListener('touchstart', unlock, { once: true });
+    document.addEventListener('pointerdown', unlock, { once: true });
     document.addEventListener('click', unlock, { once: true });
 
     bindKeyboard();
 
-    // Bloqueia gestos de zoom (iOS)
     document.addEventListener('gesturestart', (e) => e.preventDefault());
     document.addEventListener('dblclick', (e) => e.preventDefault());
 
-    // Recupera categorias se ainda não carregaram
+    // Guarda contra refresh/fechamento acidental no meio da rodada
+    window.addEventListener('beforeunload', (e) => {
+      if (AppState.roundStatus === 'playing' || AppState.roundStatus === 'countdown') {
+        e.preventDefault();
+        e.returnValue = 'Tem rodada em andamento. Vai mesmo?';
+        return 'Tem rodada em andamento. Vai mesmo?';
+      }
+    });
+
     if (!window.GESTO_CATEGORIES) {
-      console.warn('Gesto: categorias não carregadas.');
+      dwarn('Gesto: categorias não carregadas.');
     }
 
-    // Aplica tema Panela se persistido
     applyTheme();
-
     navigate('home');
   }
 

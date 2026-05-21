@@ -1,26 +1,28 @@
-/* GESTO! — Service Worker simples
- * Estratégia: pré-cache no install + network-first com fallback offline ao cache.
- * Funciona em GitHub Pages (escopo relativo).
+/* GESTO! — Service Worker
+ * Estratégia:
+ *  - install pré-cacheia apenas o shell crítico (HTML/CSS/JS/manifest).
+ *  - assets pesados de áudio (WAV/MP3) entram no cache sob demanda no fetch handler.
+ *  - fetch: stale-while-revalidate (retorna cache rápido, atualiza em background) para mesma origem.
  */
-const VERSION = 'gesto-v2.0.0';
-const ASSETS = [
+const VERSION = 'gesto-v2.1.0';
+
+// Shell crítico (~140KB). Falha = SW não instala — força lista mínima.
+const CORE_ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
   './categories.js',
-  './manifest.webmanifest',
-  './Brass Flag Win.wav',
-  './Clockfruit Panic.wav',
-  './Fail Accordion.wav',
-  './Neon Gavel.wav',
-  './ROUND ONE FIGHT.wav',
-  './Lounge Loop.mp3'
+  './manifest.webmanifest'
 ];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(VERSION).then((cache) => cache.addAll(ASSETS).catch(() => {}))
+    caches.open(VERSION).then((cache) =>
+      cache.addAll(CORE_ASSETS).catch((err) => {
+        console.warn('[SW] Falhou pré-cache core:', err);
+      })
+    )
   );
   self.skipWaiting();
 });
@@ -43,18 +45,31 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
-  // Apenas mesma origem
   const url = new URL(req.url);
+  // Mesma origem apenas — fontes do Google passam direto
   if (url.origin !== self.location.origin) return;
 
   event.respondWith(
-    fetch(req)
-      .then((res) => {
-        // Atualiza cache em background
-        const copy = res.clone();
-        caches.open(VERSION).then((cache) => cache.put(req, copy).catch(() => {}));
-        return res;
+    caches.open(VERSION).then((cache) =>
+      cache.match(req).then((cached) => {
+        // Stale-while-revalidate: devolve cache se houver, atualiza em background
+        const fetchPromise = fetch(req)
+          .then((res) => {
+            if (res && res.status === 200) {
+              cache.put(req, res.clone()).catch(() => {});
+            }
+            return res;
+          })
+          .catch(() => null);
+
+        // Se tem em cache, devolve já (e atualiza em paralelo)
+        if (cached) {
+          fetchPromise; // fire-and-forget
+          return cached;
+        }
+        // Senão, espera a rede
+        return fetchPromise.then((res) => res || caches.match('./index.html'));
       })
-      .catch(() => caches.match(req).then((hit) => hit || caches.match('./index.html')))
+    )
   );
 });

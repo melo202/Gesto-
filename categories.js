@@ -441,18 +441,108 @@ window.GESTO_CATEGORIES = [
 /**
  * Helper: retorna a "categoria virtual" Aleatório combinando todas as palavras.
  * Chamado em app.js quando o usuário escolhe "Misturar tudo".
+ *
+ * Curva de dificuldade: peso por categoria-mãe.
+ *   Fácil/Médio:  peso 1.0
+ *   Difícil:      peso 0.50
+ *   Insano:       peso 0.25
+ * Palavras de categorias mais difíceis aparecem menos no aleatório — resolve o
+ * "às vezes fica hardcore" sem precisar taggar as 1.112 palavras individualmente.
+ *
+ * Aceita opts:
+ *   { includeHard: false }  → ignora categorias Difícil/Insano
+ *   { weighted: false }     → mistura tudo na mesma proporção (comportamento antigo)
  */
-window.GESTO_BUILD_RANDOM = function () {
-  const all = [];
-  window.GESTO_CATEGORIES.forEach((cat) => {
-    cat.words.forEach((w) => all.push(w));
+window.GESTO_BUILD_RANDOM = function (opts) {
+  opts = opts || {};
+  var includeHard = opts.includeHard !== false;
+  var weighted    = opts.weighted    !== false;
+
+  var weights = { 'Fácil': 1.0, 'Médio': 1.0, 'Difícil': 0.50, 'Insano': 0.25 };
+  var all = [];
+  var sourceMap = Object.create(null);
+  window.GESTO_CATEGORIES.forEach(function (cat) {
+    if (!includeHard && (cat.difficulty === 'Difícil' || cat.difficulty === 'Insano')) return;
+    var w = weighted ? (weights[cat.difficulty] || 1.0) : 1.0;
+    cat.words.forEach(function (word) {
+      if (Math.random() < w) {
+        all.push(word);
+        if (!sourceMap[word]) sourceMap[word] = cat.id;
+      }
+    });
   });
+  // Fallback de segurança — se peso filtrar tudo, devolve todas as palavras
+  if (all.length < 30) {
+    all = [];
+    sourceMap = Object.create(null);
+    window.GESTO_CATEGORIES.forEach(function (cat) {
+      if (!includeHard && (cat.difficulty === 'Difícil' || cat.difficulty === 'Insano')) return;
+      cat.words.forEach(function (w) {
+        all.push(w);
+        if (!sourceMap[w]) sourceMap[w] = cat.id;
+      });
+    });
+  }
   return {
-    id: "aleatorio",
-    name: "Aleatório",
-    emoji: "🎲",
-    difficulty: "Variado",
-    description: "Sorteia de todas as categorias.",
-    words: all
+    id: 'aleatorio',
+    name: 'Aleatório',
+    emoji: '🎲',
+    difficulty: 'Variado',
+    description: 'Sorteia de todas as categorias.',
+    words: all,
+    _sourceMap: sourceMap
   };
 };
+
+/**
+ * Constrói uma "categoria virtual" a partir de uma lista de IDs de categorias reais.
+ * Usado pela tela de multi-seleção e pelos presets.
+ */
+window.GESTO_BUILD_MIX = function (catIds, displayName) {
+  var cats = (catIds || [])
+    .map(function (id) { return window.GESTO_CATEGORIES.find(function (c) { return c.id === id; }); })
+    .filter(Boolean);
+  if (cats.length === 0) return null;
+  if (cats.length === 1) {
+    // 1 categoria só → devolve a própria, sem virar mix
+    return cats[0];
+  }
+  var dedup = [];
+  var seen = Object.create(null);
+  var sourceMap = Object.create(null);
+  cats.forEach(function (c) {
+    c.words.forEach(function (w) {
+      if (!seen[w]) {
+        seen[w] = 1;
+        dedup.push(w);
+        sourceMap[w] = c.id;
+      }
+    });
+  });
+  var order = { 'Fácil': 1, 'Médio': 2, 'Difícil': 3, 'Insano': 4 };
+  var worst = cats.reduce(function (acc, c) {
+    return (order[c.difficulty] || 2) > (order[acc] || 0) ? c.difficulty : acc;
+  }, 'Fácil');
+  return {
+    id: 'mix:' + cats.map(function (c) { return c.id; }).sort().join('+'),
+    name: displayName || ('Mix (' + cats.length + ' categorias)'),
+    emoji: '🍳',
+    difficulty: worst,
+    description: cats.map(function (c) { return c.name; }).join(' + '),
+    words: dedup,
+    _mixIds: cats.map(function (c) { return c.id; }),
+    _sourceMap: sourceMap
+  };
+};
+
+/**
+ * Presets sugeridos para o usuário não ter que escolher categoria por categoria.
+ */
+window.GESTO_MIX_PRESETS = [
+  { id: 'familia',   label: '👨‍👩‍👧 Família',  ids: ['animais', 'comidas', 'brasilidades', 'infantil'] },
+  { id: 'role',      label: '🍻 Rolê pesado',  ids: ['festa', 'casais', 'atualidades', 'dificil'] },
+  { id: 'cultura',   label: '🎬 Cultura pop',  ids: ['filmes', 'atualidades', 'esportes'] },
+  { id: 'brpuro',    label: '🇧🇷 BR puro',     ids: ['brasilidades', 'comidas', 'festa', 'juridico'] },
+  { id: 'suave',     label: '⚡ Suave',         ids: ['animais', 'objetos', 'profissoes', 'acoes'] },
+  { id: 'corajosos', label: '🧠 Pros corajosos', ids: ['dificil', 'atualidades', 'juridico'] }
+];

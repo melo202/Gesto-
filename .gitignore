@@ -1,0 +1,31 @@
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Arquivos do escritório / não-jogo
+Mapa_Processos*
+Painel_Processos*
+Revirada do Panela*.pdf
+skill-consultar-cnj/
+skill-panela-game-creator*
+skill-*.zip
+ziLXjLsN
+*.xlsx
+*.docx
+
+# Backup interno do projeto
+_backup_pre_lapidacao/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Diretório data/ tem categories.js órfão (duplicado)
+data/categories.js
